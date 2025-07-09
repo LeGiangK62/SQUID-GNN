@@ -75,7 +75,7 @@ def qgcn_enhance_layer_aux(inputs, spreadlayer, strong, twodesign, inits, update
     # return probs
     # expval = [qml.expval(qml.PauliZ(w)) for w in [center_wire, num_qbit, num_qbit+1]]
     expval = [
-        qml.expval(qml.PauliX(center_wire)),
+        qml.expval(qml.PauliZ(center_wire)),
         # qml.expval(qml.PauliY(center_wire)),
         # qml.expval(qml.PauliZ(center_wire)),
         # qml.expval(qml.PauliX(num_qbit)),
@@ -199,13 +199,15 @@ class QGNNGraphClassifier(nn.Module):
         self.input_node = MLP(
                     [self.node_input_dim, self.hidden_dim, self.final_dim],
                     act='leaky_relu', 
-                    norm=None, dropout=0.3
+                    norm='batch_norm', 
+                    dropout=0.3
             )
 
         self.input_edge = MLP(
                     [self.edge_input_dim, self.hidden_dim, self.pqc_dim],
                     act='leaky_relu', 
-                    norm=None, dropout=0.3
+                    norm='batch_norm', 
+                    dropout=0.3
             )
         
         for i in range(self.hop_neighbor):
@@ -221,9 +223,10 @@ class QGNNGraphClassifier(nn.Module):
             self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
             
         self.graph_head = MLP(
-                [self.final_dim, num_classes, num_classes],
+                [self.final_dim, self.hidden_dim, self.hidden_dim, num_classes],
                 act='leaky_relu', 
-                norm=None, dropout=0.3
+                norm='batch_norm', 
+                dropout=0.3
         ) 
         
     def forward(self, node_feat, edge_attr, edge_index, batch):
@@ -294,7 +297,8 @@ class QGNNGraphClassifier(nn.Module):
             updates_node = updates_node.index_add(0, centers, updates)
             
             # node_features = norm_layer(updates_node + node_features)    
-            node_features = updates_node + node_features
+            # node_features = updates_node + node_features
+            node_features = F.relu(norm_layer(updates_node + node_features))
         graph_embedding = global_mean_pool(node_features, batch)
         
         return self.graph_head(graph_embedding)
