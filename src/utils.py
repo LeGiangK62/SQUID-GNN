@@ -95,18 +95,18 @@ def test_graph(model, loader, criterion, device, num_classes=0):
     acc = correct / len(loader.dataset)
     return total_loss / len(loader.dataset), acc, f1
 
-@torch.no_grad()
-def get_predictions(model, loader):
-    model.eval()
-    all_preds = []
-    all_labels = []
-    for data in loader:
-        data = data.to(device)
-        out = model(data.x, data.edge_attr, data.edge_index, data.batch)
-        preds = out.argmax(dim=1)
-        all_preds.append(preds.cpu())
-        all_labels.append(data.y.cpu())
-    return torch.cat(all_preds), torch.cat(all_labels)
+# @torch.no_grad()
+# def get_predictions(model, loader):
+#     model.eval()
+#     all_preds = []
+#     all_labels = []
+#     for data in loader:
+#         data = data.to(device)
+#         out = model(data.x, data.edge_attr, data.edge_index, data.batch)
+#         preds = out.argmax(dim=1)
+#         all_preds.append(preds.cpu())
+#         all_labels.append(data.y.cpu())
+#     return torch.cat(all_preds), torch.cat(all_labels)
 
 def train_node(model, optimizer, data, criterion, device):
     model.train()

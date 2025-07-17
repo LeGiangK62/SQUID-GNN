@@ -18,7 +18,7 @@ class GIN_Node(nn.Module):
         for conv in self.convs:
             x = F.relu(conv(x, edge_index))
             x = self.dropout(x)
-        return self.classifier(x)
+        return x
     
 
 
@@ -33,11 +33,11 @@ class GCN_Node(nn.Module):
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x, edge_attr, edge_index, batch=None):
-        for conv in self.convs[:-1]:
+        for conv in self.convs:
             x = F.relu(conv(x, edge_index))
             x = self.dropout(x)
         # last layer, no activation
-        return self.convs[-1](x, edge_index)
+        return x
 
 
 class GAT_Node(nn.Module):
@@ -59,10 +59,10 @@ class GAT_Node(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, edge_attr, edge_index, batch=None):
-        for conv in self.convs[:-1]:
+        for conv in self.convs:
             x = F.elu(conv(x, edge_index))
             x = self.dropout(x)
-        return self.convs[-1](x, edge_index)
+        return x
     
     
 ## NOTE: Graph Task
