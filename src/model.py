@@ -136,10 +136,11 @@ def qgcn_enhance_layer(inputs, spreadlayer, strong, twodesign, inits, update):
         # # No auxiliary
         # qml.StronglyEntanglingLayers(weights=update[i],wires=[center_wire, center_wire+i+1])
         # 2 qubit auxiliary
-        qml.StronglyEntanglingLayers(weights=update[i],wires=[center_wire, center_wire+i+1, num_qbit])
+        qml.StronglyEntanglingLayers(weights=update[i],wires=[center_wire, center_wire+i+1, num_qbit, num_qbit+1])
     expval = [
         qml.expval(qml.PauliZ(center_wire)),
         qml.expval(qml.PauliZ(num_qbit)),
+        qml.expval(qml.PauliZ(num_qbit+1)),
     ]
     return expval
 
@@ -183,7 +184,7 @@ class QGNNGraphClassifier(nn.Module):
         self.pqc_dim = 2 # number of feat per pqc for each node
         self.chunk = 1
         self.final_dim = self.pqc_dim * self.chunk # 2
-        self.pqc_out = 2 # probs?
+        self.pqc_out = 3 # probs?
         print(f"Hidden dim: {self.hidden_dim}")
         
         
@@ -204,14 +205,14 @@ class QGNNGraphClassifier(nn.Module):
                     [self.node_input_dim, self.hidden_dim, self.final_dim],
                     act='leaky_relu', 
                     norm='batch_norm', 
-                    dropout=0.2
+                    dropout=0.1
             )
 
         self.input_edge = MLP(
                     [self.edge_input_dim, self.hidden_dim, self.pqc_dim],
                     act='leaky_relu', 
                     norm='batch_norm', 
-                    dropout=0.2
+                    dropout=0.1
             )
         
         for i in range(self.hop_neighbor):
@@ -221,7 +222,7 @@ class QGNNGraphClassifier(nn.Module):
             self.upds[f"lay{i+1}"] = MLP(
                     [self.pqc_dim + self.pqc_out, self.hidden_dim, self.pqc_dim],
                     act='leaky_relu', 
-                    norm=None, dropout=0.2
+                    norm=None, dropout=0.1
             )
             
             self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
@@ -230,7 +231,7 @@ class QGNNGraphClassifier(nn.Module):
                 [self.final_dim, self.hidden_dim, self.hidden_dim, num_classes],
                 act='leaky_relu', 
                 norm='batch_norm', 
-                dropout=0.2
+                dropout=0.1
         ) 
         
     def sampling_neighbors(self, neighbor_ids, edge_ids):
@@ -321,7 +322,8 @@ class QGNNGraphClassifier(nn.Module):
             ## TODO: #####################################
 
                 all_msg = q_layer(inputs.flatten())
-                aggr = input_process(all_msg)
+                aggr = all_msg
+                # aggr = input_process(all_msg)
                 update_vec = upd_layer(torch.cat([node_features[center], aggr], dim=0))
             
                 centers.append(center)
@@ -338,7 +340,9 @@ class QGNNGraphClassifier(nn.Module):
             node_features = norm_layer(updates_node + node_features) # No ReLU
         graph_embedding = global_mean_pool(node_features, batch)
         
-        return self.graph_head(graph_embedding)
+        # return torch.sigmoid(self.graph_head(graph_embedding))
+        return F.relu(self.graph_head(graph_embedding))
+        # return torch.exp(-F.softplus(self.graph_head(graph_embedding))) 
     
     
 class QGNNNodeClassifier(nn.Module):
