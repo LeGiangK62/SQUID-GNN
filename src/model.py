@@ -115,12 +115,12 @@ def qgcn_enhance_layer(inputs, spreadlayer, strong, twodesign, inits, update):
     
     
     for i in range(num_edges):
-        qml.RX(adjacency_matrix[i][0], wires=i)
+        qml.RY(adjacency_matrix[i][0], wires=i)
         qml.RZ(adjacency_matrix[i][1], wires=i)
         # qml.RX(adjacency_matrix[i][2], wires=i)
     
     for i in range(num_nodes):
-        qml.RX(vertex_features[i][0], wires=center_wire+i)
+        qml.RY(vertex_features[i][0], wires=center_wire+i)
         qml.RZ(vertex_features[i][1], wires=center_wire+i)
         # qml.RX(vertex_features[i][2], wires=center_wire+i)
     
@@ -233,6 +233,9 @@ class QGNNGraphClassifier(nn.Module):
                 norm='batch_norm', 
                 dropout=0.1
         ) 
+        self.lin1 = nn.Linear(self.final_dim, self.hidden_dim)
+        self.classifier = nn.Linear(self.hidden_dim, num_classes)
+        self.dropout = nn.Dropout(0.4)
         
     def sampling_neighbors(self, neighbor_ids, edge_ids):
         # if neighbor_ids.numel() == 0:
@@ -339,9 +342,14 @@ class QGNNGraphClassifier(nn.Module):
             # node_features = F.relu(norm_layer(updates_node + node_features)) # Add ReLU
             node_features = norm_layer(updates_node + node_features) # No ReLU
         graph_embedding = global_mean_pool(node_features, batch)
+        output = F.relu(self.lin1(graph_embedding))
+        output = self.dropout(output)
+        # output = self.graph_head(output)
+        output = F.log_softmax(self.classifier(output), dim = -1)
+        return output
         
         # return torch.sigmoid(self.graph_head(graph_embedding))
-        return F.relu(self.graph_head(graph_embedding))
+        # return F.relu(self.graph_head(graph_embedding))
         # return torch.exp(-F.softplus(self.graph_head(graph_embedding))) 
     
     
@@ -401,10 +409,13 @@ class QGNNNodeClassifier(nn.Module):
             
         self.graph_head = MLP(
                 [self.final_dim, self.hidden_dim, self.hidden_dim, num_classes],
-                act='leaky_relu', 
+                act='log_softmax', 
                 norm='batch_norm', 
                 dropout=0.2
         ) 
+        self.lin1 = nn.Linear(self.final_dim, self.hidden_dim)
+        self.classifier = nn.Linear(self.hidden_dim, num_classes)
+        self.dropout = nn.Dropout(0.4)
         
     def sampling_neighbors(self, neighbor_ids, edge_ids):
         # if neighbor_ids.numel() == 0:
@@ -508,6 +519,9 @@ class QGNNNodeClassifier(nn.Module):
             # node_features = norm_layer(updates_node + node_features)    
             # node_features = updates_node + node_features
             node_features = norm_layer(updates_node + node_features) # Add ReLU
-        output = global_mean_pool(node_features, batch)
+        output = global_add_pool(node_features, batch)
+        output = F.relu(self.lin1(output))
+        output = self.dropout(output)
         # output = self.graph_head(output)
+        output = F.log_softmax(self.classifier(output), dim = -1)
         return output
