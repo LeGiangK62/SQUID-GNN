@@ -304,22 +304,6 @@ class QGNNGraphClassifier(nn.Module):
                 n_feat = torch.cat([center_ft.unsqueeze(0), neighbors], dim=0)
                 e_feat = edge_features[edge_ids.view(-1)]
                 inputs = torch.cat([e_feat, n_feat], dim=0)     
-                # print(center)
-                # print(neighbor_ids)
-                # prin 
-            ## TODO: #######################################
-            # for sub in subgraphs:
-            #     center, *neighbors = sub
-
-            #     n_feat = node_features[sub] 
-            #     # edge_idxs = [ idx_dict[(center, int(n))] for n in neighbors ]
-            #     edge_idxs = [
-            #         idx_dict[(min(center, int(n)), max(center, int(n)))] 
-            #         for n in neighbors 
-            #     ]
-            #     e_feat    = edge_features[edge_idxs]  
-            #     inputs = torch.cat([e_feat, n_feat], dim=0)        
-            ## TODO: #####################################
 
                 all_msg = q_layer(inputs.flatten())
                 aggr = all_msg
@@ -341,8 +325,138 @@ class QGNNGraphClassifier(nn.Module):
         graph_embedding = global_mean_pool(node_features, batch)
         
         # return torch.sigmoid(self.graph_head(graph_embedding))
-        return F.relu(self.graph_head(graph_embedding))
+        return self.graph_head(graph_embedding)
+        # return F.log_softmax(self.graph_head(graph_embedding), dim=-1)
+        # return F.relu(self.graph_head(graph_embedding)) # Relu bahave shit?
         # return torch.exp(-F.softplus(self.graph_head(graph_embedding))) 
+    
+    
+class QGNN_HetNodeClassifier(nn.Module):
+    def __init__(self, q_dev, w_shapes, hidden_dim, node_input_dim={}, edge_input_dim=1,
+                 graphlet_size=4, hop_neighbor=1, num_classes=2, meta=['UE', 'AP']):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.graphlet_size = graphlet_size
+        self.hop_neighbor = hop_neighbor
+        self.pqc_dim = 2 # number of feat per pqc for each node
+        self.chunk = 1
+        self.final_dim = self.pqc_dim * self.chunk # 2
+        self.pqc_out = 3 # probs?
+        print(f"Hidden dim: {self.hidden_dim}")
+        
+        
+        self.qconvs = nn.ModuleDict()
+        self.upds = nn.ModuleDict()
+        self.aggs = nn.ModuleDict()
+        self.norms = nn.ModuleDict()
+        
+        self.node_input_dim = {}
+        self.edge_input_dim = {}
+        
+        for node_type in meta:
+            self.node_input_dim[node_type] = node_input_dim[node_type]
+            self.edge_input_dim[node_type] = edge_input_dim[node_type] if edge_input_dim[node_type] > 0 else 1
+
+            
+            self.input_node[node_type] = MLP(
+                        [self.node_input_dim[node_type], self.hidden_dim, self.final_dim],
+                        act='leaky_relu', 
+                        norm='batch_norm', 
+                        dropout=0.1
+                )
+
+            self.input_edge[node_type] = MLP(
+                        [self.edge_input_dim[node_type], self.hidden_dim, self.pqc_dim],
+                        act='leaky_relu', 
+                        norm='batch_norm', 
+                        dropout=0.1
+                )
+            
+            for i in range(self.hop_neighbor):
+                qnode = qml.QNode(qgcn_enhance_layer, q_dev,  interface="torch")
+                self.qconvs[f"lay{i+1}"] = qml.qnn.TorchLayer(qnode, w_shapes, uniform_pi_init)
+                
+                self.upds[f"lay{i+1}"] = MLP(
+                        [self.pqc_dim + self.pqc_out, self.hidden_dim, self.pqc_dim],
+                        act='leaky_relu', 
+                        norm=None, dropout=0.1
+                )
+                
+                self.norms[f"lay{i+1}_{node_type}"] = nn.LayerNorm(self.pqc_dim)
+            
+        self.final_layer = MLP(
+                [self.final_dim, self.hidden_dim, self.hidden_dim, num_classes],
+                act='leaky_relu', 
+                norm='batch_norm', 
+                dropout=0.1
+        ) 
+        
+    def sampling_neighbors(self, neighbor_ids, edge_ids):
+        # if neighbor_ids.numel() == 0:
+        #     return neighbor_ids, edge_ids
+
+        if neighbor_ids.numel() > self.graphlet_size - 1:
+            perm = torch.randperm(neighbor_ids.numel())[:self.graphlet_size - 1]
+            neighbor_ids = neighbor_ids[perm]
+            edge_ids = edge_ids[perm]
+            
+        return neighbor_ids, edge_ids
+        
+    def forward(self, x_dict, edge_attr_dict, edge_index_dict, batch_dict):        
+        for node_type, node_feat in x_dict.items():
+            x_dict[node_type] = self.input_node[node_type](node_feat.float())
+        
+        for edge_type, edge_index in edge_index_dict.items():
+            src_type, _, dst_type = edge_type
+            edge_attr_dict[edge_type] = self.input_edge[dst_type](edge_attr_dict[edge_type].float())
+        
+        
+        
+        for i in range(self.hop_neighbor):
+            for edge_type, edge_index in edge_index_dict.items():
+                q_layer = self.qconvs[f"lay{i+1}_{dst_type}"]
+                upd_layer = self.upds[f"lay{i+1}_{dst_type}"]
+                norm_layer = self.norms[f"lay{i+1}_{dst_type}"]
+
+                edge_attr = edge_attr_dict[edge_type]
+                src_feat = x_dict[src_type]
+                dst_feat = x_dict[dst_type]
+                
+                centers = []
+                updates = []
+            
+                ## FIXME: #####################################
+                dst_indices = torch.unique(edge_index[:,1])
+                perm = torch.randperm(dst_indices.shape[0])
+                dst_indices = dst_indices[perm].tolist()
+                for dst_idx in dst_indices:
+                    neighbor_mask = (edge_index[1] == dst_idx)
+                    neighbor_ids = edge_index[0][neighbor_mask]
+                    edge_ids = torch.nonzero(neighbor_mask, as_tuple=False).squeeze()
+                    neighbor_ids, edge_ids  = self.sampling_neighbors(neighbor_ids, edge_ids)
+                    
+                    center = dst_feat[dst_idx]
+                    neighbors = src_feat[neighbor_ids]
+                    n_feat = torch.cat([center.unsqueeze(0), neighbors], dim=0)
+                    e_feat = edge_attr[edge_ids.view(-1)]
+                    
+                    inputs = torch.cat([e_feat, n_feat], dim=0)
+                    all_msg = q_layer(inputs.flatten())
+                    aggr = all_msg
+                    update_dst = upd_layer(torch.cat([center, aggr], dim=0))
+                    updates.append(update_dst)
+                    centers.append(dst_idx)
+                
+                centers = torch.tensor(centers, device=dst_feat.device)
+                updates = torch.stack(updates, dim=0)
+                updates_node = torch.zeros_like(dst_feat)
+                updates_node = updates_node.index_add(0, centers, updates)
+                
+
+                x_dict[dst_type] = norm_layer(x_dict[dst_type] + updates_node)
+        
+        return torch.sigmoid(self.final_layer(x_dict['UE'])) # Check the node_type?
+    
     
     
 class QGNNNodeClassifier(nn.Module):
@@ -356,7 +470,7 @@ class QGNNNodeClassifier(nn.Module):
         self.pqc_dim = 2 # number of feat per pqc for each node
         self.chunk = 1
         self.final_dim = self.pqc_dim * self.chunk # 2
-        self.pqc_out = 2 # probs?
+        self.pqc_out = 3 # probs?
         print(f"Hidden dim: {self.hidden_dim}")
         
         
@@ -377,14 +491,14 @@ class QGNNNodeClassifier(nn.Module):
                     [self.node_input_dim, self.hidden_dim, self.final_dim],
                     act='leaky_relu', 
                     norm='batch_norm', 
-                    dropout=0.2
+                    dropout=0.1
             )
 
         self.input_edge = MLP(
                     [self.edge_input_dim, self.hidden_dim, self.pqc_dim],
                     act='leaky_relu', 
                     norm='batch_norm', 
-                    dropout=0.2
+                    dropout=0.1
             )
         
         for i in range(self.hop_neighbor):
@@ -394,16 +508,16 @@ class QGNNNodeClassifier(nn.Module):
             self.upds[f"lay{i+1}"] = MLP(
                     [self.pqc_dim + self.pqc_out, self.hidden_dim, self.pqc_dim],
                     act='leaky_relu', 
-                    norm=None, dropout=0.2
+                    norm=None, dropout=0.1
             )
             
             self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
             
-        self.graph_head = MLP(
+        self.final_layer = MLP(
                 [self.final_dim, self.hidden_dim, self.hidden_dim, num_classes],
                 act='leaky_relu', 
                 norm='batch_norm', 
-                dropout=0.2
+                dropout=0.1
         ) 
         
     def sampling_neighbors(self, neighbor_ids, edge_ids):
@@ -494,7 +608,8 @@ class QGNNNodeClassifier(nn.Module):
             ## TODO: #####################################
 
                 all_msg = q_layer(inputs.flatten())
-                aggr = all_msg #input_process(all_msg)
+                aggr = all_msg
+                # aggr = input_process(all_msg)
                 update_vec = upd_layer(torch.cat([node_features[center], aggr], dim=0))
             
                 centers.append(center)
@@ -507,7 +622,7 @@ class QGNNNodeClassifier(nn.Module):
             
             # node_features = norm_layer(updates_node + node_features)    
             # node_features = updates_node + node_features
-            node_features = norm_layer(updates_node + node_features) # Add ReLU
-        output = global_mean_pool(node_features, batch)
-        # output = self.graph_head(output)
-        return output
+            # node_features = F.relu(norm_layer(updates_node + node_features)) # Add ReLU
+            node_features = norm_layer(updates_node + node_features) # No ReLU
+        
+        return F.relu(self.final_layer(node_features))

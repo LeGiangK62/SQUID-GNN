@@ -9,7 +9,7 @@ import numpy as np
 
 from utils import train_graph, test_graph, EarlyStopping
 from data import load_dataset, eval_dataset, random_split
-from model import QGNNGraphClassifier
+from model import QGNNGraphClassifier, QGNNNodeClassifier
 from test import HandcraftGNN, HandcraftGNN_NodeClassification
 
 from datetime import datetime
@@ -175,7 +175,7 @@ def main(args):
     elif args.task == 'node':
         data = dataset[0].to(device)
         if args.model == 'qgnn':
-            model = QGNNGraphClassifier(
+            model = QGNNNodeClassifier(
                 q_dev=q_dev,
                 w_shapes=w_shapes_dict,
                 hidden_dim=args.hidden_channels,
@@ -232,6 +232,7 @@ def main(args):
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
     criterion = nn.CrossEntropyLoss()
+    # criterion = nn.NLLLoss() ## MUTAG
 
     ## Note: For debugging purposes, you can uncomment the following lines to print model details. 
     # ##
@@ -279,8 +280,8 @@ def main(args):
             train_loss, train_acc, f1_train = test_graph(model, train_loader, criterion, device, num_classes)
             test_loss, test_acc, f1_test = test_graph(model, test_loader, criterion, device, num_classes)
             scheduler.step()
-            if args.save_model:
-                early_stopping(test_loss, model)
+            # if args.save_model:
+            #     early_stopping(test_loss, model)
             train_losses.append(train_loss)
             test_losses.append(test_loss)
             train_accs.append(train_acc)
