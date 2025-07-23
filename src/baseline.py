@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GINConv, GCNConv, GATConv, SAGEConv, TransformerConv, global_add_pool, global_mean_pool
+from torch_geometric.nn import MLP, GINConv, GCNConv, GATConv, SAGEConv, TransformerConv, global_add_pool, global_mean_pool
 
 class GIN_Node(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
@@ -87,23 +87,23 @@ class GraphSAGE_Node(torch.nn.Module):
         return x
 
 ## NOTE: Graph Task
-class MLP(nn.Module):
-    def __init__(self, in_dim, hidden_dim, num_layers):
-        super().__init__()
-        layers = []
-        # input layer
-        layers.append(nn.Linear(in_dim, hidden_dim))
-        layers.append(nn.ReLU())
-        layers.append(nn.BatchNorm1d(hidden_dim))
-        # hidden layers
-        for _ in range(num_layers - 1):
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
-            layers.append(nn.ReLU())
-            layers.append(nn.BatchNorm1d(hidden_dim))
-        self.net = nn.Sequential(*layers)
+# class MLP(nn.Module):
+#     def __init__(self, in_dim, hidden_dim, num_layers):
+#         super().__init__()
+#         layers = []
+#         # input layer
+#         layers.append(nn.Linear(in_dim, hidden_dim))
+#         layers.append(nn.ReLU())
+#         layers.append(nn.BatchNorm1d(hidden_dim))
+#         # hidden layers
+#         for _ in range(num_layers - 1):
+#             layers.append(nn.Linear(hidden_dim, hidden_dim))
+#             layers.append(nn.ReLU())
+#             layers.append(nn.BatchNorm1d(hidden_dim))
+#         self.net = nn.Sequential(*layers)
 
-    def forward(self, x):
-        return self.net(x)
+#     def forward(self, x):
+#         return self.net(x)
 
 class GIN_Graph(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
@@ -111,8 +111,10 @@ class GIN_Graph(nn.Module):
         self.convs = nn.ModuleList()
         for i in range(num_layers):
             in_dim = in_channels if i == 0 else hidden_channels
-            mlp = MLP(in_dim,
-                       hidden_channels, hidden_channels)
+            # mlp = MLP(in_dim,
+            #            hidden_channels, hidden_channels)
+            mlp = MLP([in_channels if i==0 else hidden_channels,
+                       hidden_channels, hidden_channels])
             self.convs.append(GINConv(nn=mlp, train_eps=False))
         self.dropout = nn.Dropout(0.5)
         self.lin1 = nn.Linear(hidden_channels, hidden_channels)
@@ -125,6 +127,7 @@ class GIN_Graph(nn.Module):
         x = F.relu(self.lin1(x))
         x = self.dropout(x)
         return F.log_softmax(self.classifier(x), dim=-1)
+        # return self.classifier(x)
     
 class GCN_Graph(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
