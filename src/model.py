@@ -205,14 +205,14 @@ class QGNNGraphClassifier(nn.Module):
                     [self.node_input_dim, self.hidden_dim, self.final_dim],
                     act='leaky_relu', 
                     norm='batch_norm', 
-                    dropout=0.1
+                    dropout=0.0
             )
 
         self.input_edge = MLP(
                     [self.edge_input_dim, self.hidden_dim, self.pqc_dim],
                     act='leaky_relu', 
                     norm='batch_norm', 
-                    dropout=0.1
+                    dropout=0.0
             )
         
         for i in range(self.hop_neighbor):
@@ -222,7 +222,7 @@ class QGNNGraphClassifier(nn.Module):
             self.upds[f"lay{i+1}"] = MLP(
                     [self.pqc_dim + self.pqc_out, self.hidden_dim, self.pqc_dim],
                     act='leaky_relu', 
-                    norm=None, dropout=0.1
+                    norm=None, dropout=0.4
             )
             
             self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
