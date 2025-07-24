@@ -526,7 +526,7 @@ class QGNNNodeClassifier(nn.Module):
         output = self.dropout(output)
         # output = self.graph_head(output)
         output = F.log_softmax(self.classifier(output), dim = -1)
-    
+        return output
     
 ##
 class QGNN_MUTAG(nn.Module):

@@ -56,6 +56,9 @@ def get_args():
     parser.add_argument('--save_model', action='store_true', help='Enable saving model')
     parser.add_argument('--gradient', action='store_true', help='Enable gradient saving')
     parser.add_argument('--results', action='store_true', help='Evaluate results')
+    parser.add_argument('--criterion', type=str, default='crossentropy',
+                        choices=['crossentropy', 'MSE', 'BCE', 'L1', 'NLL'],
+                        help="Which loss function to train model")
     
     # For switching between models
     parser.add_argument('--model', type=str, default='qgnn', 
@@ -239,7 +242,18 @@ def main(args):
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-    criterion = nn.CrossEntropyLoss()
+    if args.criterion == 'crossentropy':
+        criterion = nn.CrossEntropyLoss()
+    elif args.criterion == 'MSE':
+        criterion = nn.MSELoss()
+    elif args.criterion == 'BCE':
+        criterion = nn.BCEWithLogitsLoss()
+    elif args.criterion == 'L1':
+        criterion = nn.L1Loss()
+    elif args.criterion == 'NLL':
+        criterion  = nn.NLLLoss()
+    else:
+        raise ValueError(f"Unssuported loss function")
     # criterion = nn.NLLLoss() ## MUTAG
 
     ## Note: For debugging purposes, you can uncomment the following lines to print model details. 
