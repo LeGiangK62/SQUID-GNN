@@ -325,11 +325,11 @@ class QGNNGraphClassifier(nn.Module):
             node_features = norm_layer(updates_node) + node_features # No ReLU
         # graph_embedding = global_mean_pool(node_features, batch)
         graph_embedding = global_add_pool(node_features, batch)
-        graph_embedding = F.relu(graph_embedding)
+        # graph_embedding = F.relu(graph_embedding)
         
         # return torch.sigmoid(self.graph_head(graph_embedding))
-        # return self.graph_head(graph_embedding)
-        return F.log_softmax(self.graph_head(graph_embedding), dim=-1)
+        return self.graph_head(graph_embedding)
+        # return F.log_softmax(self.graph_head(graph_embedding), dim=-1)
         # return F.relu(self.graph_head(graph_embedding)) # Relu bahave shit?
         # return torch.exp(-F.softplus(self.graph_head(graph_embedding))) 
     
@@ -554,30 +554,14 @@ class QGNNNodeClassifier(nn.Module):
         edge_features = input_process(edge_features)
         
         
-        idx_dict = {
-            (int(u), int(v)): i
-            for i, (u, v) in enumerate(edge_index.tolist())
-        }
-        
-
-        adj_mtx = torch.zeros((num_nodes, num_nodes), dtype=torch.int)
-        adj_mtx[edge_index[:, 0], edge_index[:, 1]] = 1
-        adj_mtx[edge_index[:, 1], edge_index[:, 0]] = 1
-        
-        
         for i in range(self.hop_neighbor):
-            subgraphs = star_subgraph(adj_mtx.cpu().numpy(), subgraph_size=self.graphlet_size)
-            node_upd = torch.zeros((num_nodes, self.final_dim), device=node_features.device)
             q_layer = self.qconvs[f"lay{i+1}"]
             upd_layer = self.upds[f"lay{i+1}"]
             norm_layer = self.norms[f"lay{i+1}"]
-
-            # updates_node = node_features.clone() 
             
             centers = []
             updates = []
             
-            ## FIXME: #####################################
             dst_indices = torch.unique(edge_index[:,1])
             perm = torch.randperm(dst_indices.shape[0])
             dst_indices = dst_indices[perm].tolist()
@@ -592,27 +576,11 @@ class QGNNNodeClassifier(nn.Module):
                 neighbors = node_features[neighbor_ids]
                 n_feat = torch.cat([center_ft.unsqueeze(0), neighbors], dim=0)
                 e_feat = edge_features[edge_ids.view(-1)]
+                # e_feat = torch.ones_like(e_feat)
                 inputs = torch.cat([e_feat, n_feat], dim=0)     
-                # print(center)
-                # print(neighbor_ids)
-                # prin 
-            ## TODO: #######################################
-            # for sub in subgraphs:
-            #     center, *neighbors = sub
-
-            #     n_feat = node_features[sub] 
-            #     # edge_idxs = [ idx_dict[(center, int(n))] for n in neighbors ]
-            #     edge_idxs = [
-            #         idx_dict[(min(center, int(n)), max(center, int(n)))] 
-            #         for n in neighbors 
-            #     ]
-            #     e_feat    = edge_features[edge_idxs]  
-            #     inputs = torch.cat([e_feat, n_feat], dim=0)        
-            ## TODO: #####################################
 
                 all_msg = q_layer(inputs.flatten())
                 aggr = all_msg
-                # aggr = input_process(all_msg)
                 update_vec = upd_layer(torch.cat([node_features[center], aggr], dim=0))
             
                 centers.append(center)
@@ -627,8 +595,9 @@ class QGNNNodeClassifier(nn.Module):
             # node_features = updates_node + node_features
             # node_features = F.relu(norm_layer(updates_node + node_features)) # Add ReLU
             node_features = norm_layer(updates_node + node_features) # No ReLU
-        
-        return F.relu(self.final_layer(node_features))
+        node_features = F.sigmoid(node_features)
+
+        return self.final_layer(node_features)
     
     
 ##

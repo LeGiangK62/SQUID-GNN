@@ -100,9 +100,9 @@ def main(args):
     )
     
     result_base = f"{timestamp}_{args.model}_{args.graphlet_size}_{args.epochs}_{args.lr}"
-    plot_train_path = os.path.join(result_dir, 'fig', f"plot_{result_base}_train.png")
-    npz_path = os.path.join(result_dir, 'train_plot', f"data_{result_base}.npz")
-    model_save = os.path.join(result_dir, 'model', f"model_{result_base}.pt")
+    plot_train_path = os.path.join(result_dir, 'fig', f"{args.dataset.lower()}_plot_{result_base}_train.png")
+    npz_path = os.path.join(result_dir, 'train_plot', f"{args.dataset.lower()}_data_{result_base}.npz")
+    model_save = os.path.join(result_dir, 'model', f"{args.dataset.lower()}_model_{result_base}.pt")
 
     # if task_type != 'graph':
     #     raise NotImplementedError("Node classification support is not implemented yet.")
@@ -310,7 +310,7 @@ def main(args):
     if args.continue_train or args.pre_train is None:
     
         if args.task == 'graph':
-            for epoch in range(1, args.epochs + 1):
+            for epoch in range(args.epochs):
                 train_graph(model, optimizer, train_loader, criterion, device)
                 train_loss, train_acc, f1_train = test_graph(model, train_loader, criterion, device, num_classes)
                 test_loss, test_acc, f1_test = test_graph(model, test_loader, criterion, device, num_classes)
@@ -375,7 +375,7 @@ def main(args):
                                         
                 scheduler.step(test_metrics['val']['loss'])
                 if epoch % step_plot == 0:
-                    print(f"Epoch {epoch:02d} | Train Loss: {train_loss:.4f} |" +
+                    print(f"Epoch {epoch+1:02d}/{args.epochs+1:02d} | Train Loss: {train_loss:.4f} |" +
                         f"Train Acc: {test_metrics['train']['acc']:.4f} | "
                         f"Val Acc: {test_metrics['val']['acc']:.4f} | Test Acc: {test_metrics['test']['acc']:.4f}")
     if args.save_model:

@@ -22,22 +22,22 @@ class GIN_Node(nn.Module):
     
 
 
-class GCN_Node(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
-        super().__init__()
-        self.convs = nn.ModuleList()
-        for i in range(num_layers):
-            in_ch  = in_channels if i==0 else hidden_channels
-            out_ch = out_channels  if i==num_layers-1 else hidden_channels
-            self.convs.append(GCNConv(in_ch, out_ch))
-        self.dropout = nn.Dropout(0.1)
+# class GCN_Node(nn.Module):
+#     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
+#         super().__init__()
+#         self.convs = nn.ModuleList()
+#         for i in range(num_layers):
+#             in_ch  = in_channels if i==0 else hidden_channels
+#             out_ch = out_channels  if i==num_layers-1 else hidden_channels
+#             self.convs.append(GCNConv(in_ch, out_ch))
+#         self.dropout = nn.Dropout(0.1)
 
-    def forward(self, x, edge_attr, edge_index, batch=None):
-        for conv in self.convs[:-1]:
-            x = F.sigmoid(conv(x, edge_index))
-        x = self.dropout(x)
-        # last layer, no activation
-        return self.convs[-1](x, edge_index)
+#     def forward(self, x, edge_attr, edge_index, batch=None):
+#         for conv in self.convs[:-1]:
+#             x = F.sigmoid(conv(x, edge_index))
+#         x = self.dropout(x)
+#         # last layer, no activation
+#         return self.convs[-1](x, edge_index)
 
 
 class GAT_Node(nn.Module):
@@ -199,4 +199,50 @@ class Transformer_Graph(nn.Module):
             x = F.relu(conv(x, edge_index))
             x = self.dropout(x)
         x = global_add_pool(x, batch)
+        return self.classifier(x)
+    
+    
+##
+class GIN_MUTAG(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        for i in range(num_layers):
+            in_dim = in_channels if i == 0 else hidden_channels
+            # mlp = MLP(in_dim,
+            #            hidden_channels, hidden_channels)
+            mlp = MLP([in_channels if i==0 else hidden_channels,
+                       hidden_channels, hidden_channels])
+            self.convs.append(GINConv(nn=mlp, train_eps=False))
+        self.dropout = nn.Dropout(0.5)
+        self.lin1 = nn.Linear(hidden_channels, hidden_channels)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        for conv in self.convs:
+            x = conv(x, edge_index)
+        x = global_add_pool(x, batch)
+        x = F.relu(self.lin1(x))
+        x = self.dropout(x)
+        return F.log_softmax(self.classifier(x), dim=-1)
+    
+##
+class GCN_Node(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        for i in range(num_layers):
+            in_ch  = in_channels if i==0 else hidden_channels
+            out_ch = hidden_channels #out_channels  if i==num_layers-1 else hidden_channels
+            self.convs.append(GCNConv(in_ch, out_ch))
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        # for conv in self.convs[:-1]:
+        for conv in self.convs:
+            x = conv(x, edge_index)
+        x = F.sigmoid(x)
+        x = self.dropout(x)
+        # last layer, no activation
         return self.classifier(x)
