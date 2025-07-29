@@ -3,7 +3,7 @@ import os
 from torch_geometric.datasets import TUDataset, ZINC, Planetoid, WikipediaNetwork
 from torch_geometric.loader import DataLoader
 
-def load_dataset(name, path='../data', train_size=None, test_size=None, batch_size=32):
+def load_dataset(name, path='../data', train_size=None, test_size=None, eval_size=None, batch_size=32):
     name = name.upper()
     task_type = 'graph'
 
@@ -20,6 +20,22 @@ def load_dataset(name, path='../data', train_size=None, test_size=None, batch_si
     elif name in ['CORA', 'CITESEER', 'PUBMED']:
         dataset = Planetoid(root=os.path.join(path, 'Planetoid'), name=name)
         data = dataset[0]
+        
+        torch.manual_seed(1712)
+        num_nodes = data.num_nodes
+        perm = torch.randperm(num_nodes)
+        if train_size:
+            train_idx = perm[:train_size]
+            data.train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.train_mask[train_idx] = True
+        if eval_size:
+            val_idx = perm[train_size:train_size + eval_size]
+            data.val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.val_mask[val_idx] = True
+        if test_size:
+            test_idx = perm[train_size + eval_size:train_size + eval_size + test_size]
+            data.test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.test_mask[test_idx] = True
         return dataset, data, data, 'node'
 
     elif name in ['CORNELL', 'WISCONSIN']:

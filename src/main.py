@@ -84,8 +84,10 @@ def main(args):
         # 'inits': (1, 4),
         # 'update': (1, args.num_ent_layers, 3, 3), # (1, args.num_ent_layers, 2, 3)
         # NEW
-        'inits': (1, 2), # New
-        'strong': (1, args.num_ent_layers, 2, 3), # New
+        # 'inits': (1, 2), # New
+        # 'strong': (1, args.num_ent_layers, 2, 3), # strong ent
+        'inits': (args.num_ent_layers, 4), # Custom 14
+        'strong': (args.num_ent_layers, 4), # custom 14
         'update': (args.graphlet_size, args.num_ent_layers-1, 4, 3),
         'twodesign': (0, args.num_ent_layers, 1, 2)
     }
@@ -96,6 +98,7 @@ def main(args):
         path='../data',
         train_size=args.train_size,
         test_size=args.test_size,
+        eval_size=args.eval_size,
         batch_size=args.batch_size
     )
     
@@ -213,6 +216,14 @@ def main(args):
                 out_channels=num_classes,
                 num_layers=args.num_gnn_layers,
             )
+        elif args.model == 'sage':
+            from baseline import GraphSAGE_Node
+            model = GraphSAGE_Node(
+                in_channels=node_input_dim,
+                hidden_channels=args.hidden_channels,
+                out_channels=num_classes,
+                num_layers=args.num_gnn_layers
+            )
         elif args.model == 'gcn':
             from baseline import GCN_Node
             model = GCN_Node(
@@ -230,6 +241,15 @@ def main(args):
                 num_layers=args.num_gnn_layers,
                 heads=8,
             )
+        elif args.model == 'trans':
+            from baseline import Transformer_Node
+            model = Transformer_Node(
+                in_channels=node_input_dim,
+                hidden_channels=args.hidden_channels//8,    # heads * hidden
+                out_channels=num_classes,
+                num_layers=args.num_gnn_layers,
+                heads=8,
+            )
         else:
             raise ValueError(f"Unsupported model for node task: {args.model}")
     else:
@@ -240,7 +260,7 @@ def main(args):
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
     criterion = nn.CrossEntropyLoss()
-    # criterion = nn.NLLLoss() ## MUTAG
+    # criterion = nn.NLLLoss() ## MUTAG - no need
 
     ## Note: For debugging purposes, you can uncomment the following lines to print model details. 
     # ##

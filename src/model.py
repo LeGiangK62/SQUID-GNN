@@ -94,6 +94,27 @@ def message_passing_pqc(strong, twodesign, inits, wires):
     qml.CRX(inits[0, 0], wires=[neighbor, edge])
     qml.CRY(inits[0, 1], wires=[edge, neighbor])
     qml.StronglyEntanglingLayers(weights=strong[0], wires=[edge, neighbor])
+    
+
+def entangle_circuit(strong, twodesign, inits, wires):
+    w0,_, w1 = wires
+    ## 14
+    num_ent_layer = strong.shape[0]
+    
+    for i in range(num_ent_layer):
+        qml.RY(inits[i,1], wires=w0)
+        qml.RY(inits[i,2], wires=w1)
+        
+        qml.CRX(strong[i,0], wires=[w0,w1])
+        qml.CRX(strong[i,1], wires=[w1,w0])
+        
+        qml.RY(inits[i,2], wires=w0)
+        qml.RY(inits[i,3], wires=w1)
+        
+        qml.CRX(strong[i,2], wires=[w0,w1])
+        qml.CRX(strong[i,3], wires=[w1,w0])
+    ##
+    
 
 def qgcn_enhance_layer(inputs, spreadlayer, strong, twodesign, inits, update):
     edge_feat_dim = feat_dim = node_feat_dim = 2
@@ -127,7 +148,9 @@ def qgcn_enhance_layer(inputs, spreadlayer, strong, twodesign, inits, update):
     
     for i in range(num_edges):
 
-        message_passing_pqc(strong=strong, twodesign=twodesign, inits=inits, 
+        # message_passing_pqc(strong=strong, twodesign=twodesign, inits=inits, 
+        #                     wires=[i, center_wire, center_wire+i+1])
+        entangle_circuit(strong=strong, twodesign=twodesign, inits=inits, 
                             wires=[i, center_wire, center_wire+i+1])
 
     # for i in range(num_edges):
@@ -595,7 +618,7 @@ class QGNNNodeClassifier(nn.Module):
             # node_features = updates_node + node_features
             # node_features = F.relu(norm_layer(updates_node + node_features)) # Add ReLU
             node_features = norm_layer(updates_node + node_features) # No ReLU
-        node_features = F.sigmoid(node_features)
+        node_features = F.sigmoid(F.relu(node_features))
 
         return self.final_layer(node_features)
     
