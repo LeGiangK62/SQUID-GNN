@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import MLP, GINConv, GCNConv, GATConv, SAGEConv, TransformerConv, global_add_pool, global_mean_pool
+from torch_geometric.nn import MLP, HeteroConv, GraphConv, GINConv, GCNConv, GATConv, SAGEConv, TransformerConv, global_add_pool, global_mean_pool
 
 class GIN_Node(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
@@ -299,8 +299,8 @@ class GNN_Node(nn.Module):
                 out_ch = hidden_channels #out_channels  if i==num_layers-1 else hidden_channels
                 self.convs.append(SAGEConv(in_ch, out_ch))
             elif name == 'trans':
-                in_dim = in_channels if i == 0 else hidden_channels * heads
-                self.convs.append(TransformerConv(in_dim, hidden_channels, heads=heads))
+                in_dim = in_channels if i == 0 else hidden_channels
+                self.convs.append(TransformerConv(in_dim, hidden_channels//heads, heads=heads))
         self.dropout = nn.Dropout(0.1)
         self.classifier = nn.Linear(hidden_channels, out_channels)
 
@@ -310,3 +310,51 @@ class GNN_Node(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
         return self.classifier(x)
+    
+# Heterogeneous Graph
+
+class HeteroGNN_Node(nn.Module):
+    def __init__(self, name, node_name, metadata, in_channels, hidden_channels, out_channels, num_layers, heads=1):
+        super().__init__()
+        self.name = name
+        self.num_layers = num_layers
+        self.convs = nn.ModuleList()
+
+        for i in range(num_layers):
+            layer = HeteroConv(
+                {
+                    edge_type: self.build_conv(
+                        name=name,
+                        in_channels=in_channels if i == 0 else hidden_channels,
+                        out_channels=hidden_channels//(heads if name == 'trans' else 1),
+                        heads=heads
+                    )
+                    for edge_type in metadata[1]  # edge_types
+                },
+                aggr='sum'
+            )
+            self.convs.append(layer)
+
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def build_conv(self, name, in_channels, out_channels, heads=1):
+        if name == 'gin':
+            mlp = MLP([in_channels, out_channels, out_channels])
+            return GINConv(nn=mlp, train_eps=False)
+        elif name == 'gcn':
+            return GraphConv(in_channels, out_channels)
+        elif name == 'sage':
+            return SAGEConv(in_channels, out_channels)
+        elif name == 'trans':
+            return TransformerConv(in_channels, out_channels, heads=heads)
+        else:
+            raise ValueError(f"Unknown conv name: {name}")
+
+    def forward(self, x_dict, edge_attr_dict, edge_index_dict):
+        for conv in self.convs:
+            x_dict = conv(x_dict, edge_index_dict)
+            x_dict = {k: F.relu(v) for k, v in x_dict.items()}
+        x_dict = {k: self.dropout(v) for k, v in x_dict.items()}
+        return self.classifier(x_dict['movie']) 
+    

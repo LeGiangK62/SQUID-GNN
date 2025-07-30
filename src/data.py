@@ -1,6 +1,6 @@
 import torch
 import os
-from torch_geometric.datasets import TUDataset, ZINC, Planetoid, WikipediaNetwork
+from torch_geometric.datasets import TUDataset, ZINC, Planetoid, WikipediaNetwork, IMDB, DBLP, AMiner
 from torch_geometric.loader import DataLoader
 
 def load_dataset(name, path='../data', train_size=None, test_size=None, eval_size=None, batch_size=32):
@@ -42,6 +42,21 @@ def load_dataset(name, path='../data', train_size=None, test_size=None, eval_siz
         dataset = WikipediaNetwork(root=os.path.join(path, 'WebKB'), name=name.lower(), geom_gcn_preprocess=True)
         data = dataset[0]
         return dataset, data, data, 'node'
+    
+    elif name == 'IMDB':
+        dataset = IMDB(root=os.path.join(path, 'IMDB'))
+        data = dataset[0]
+        return dataset, data, data, 'node-het-movie'
+
+    elif name == 'DBLP':
+        dataset = DBLP(root=os.path.join(path, 'DBLP'))
+        data = dataset[0]
+        return dataset, data, data, 'node-het-author'
+
+    elif name == 'AMINER':
+        dataset = AMiner(root=os.path.join(path, 'AMiner'))
+        data = dataset[0]
+        return dataset, data, data, 'node-het-author'
 
     else:
         raise ValueError(f"Dataset '{name}' not supported.")
@@ -86,11 +101,26 @@ def eval_dataset(name, path='../data', eval_size=None, batch_size=32, seed=1309)
         dataset = WikipediaNetwork(root=os.path.join(path, 'WebKB'), name=name.lower(), geom_gcn_preprocess=True)
         eval_loader = dataset[0]
         task_type = 'node'
+    
+    elif name == 'IMDB':
+        dataset = IMDB(root=os.path.join(path, 'IMDB'))
+        eval_loader = dataset[0]
+        task_type = 'node-het-movie'
+
+    elif name == 'DBLP':
+        dataset = DBLP(root=os.path.join(path, 'DBLP'))
+        eval_loader = dataset[0]
+        task_type = 'node-het-author'
+
+    elif name == 'AMINER':
+        dataset = AMiner(root=os.path.join(path, 'AMiner'))
+        eval_loader = dataset[0]
+        task_type = 'node-het-author'
 
     else:
         raise ValueError(f"Dataset '{name}' not supported.")
 
-    return eval_loader
+    return eval_loader, task_type
 
 def random_split(data, train_ratio=0.6, val_ratio=0.2, seed=42):
     torch.manual_seed(seed)

@@ -618,7 +618,8 @@ class QGNNNodeClassifier(nn.Module):
             # node_features = updates_node + node_features
             # node_features = F.relu(norm_layer(updates_node + node_features)) # Add ReLU
             node_features = norm_layer(updates_node + node_features) # No ReLU
-        node_features = F.sigmoid(F.relu(node_features))
+        node_features = F.sigmoid(node_features)
+        # node_features = F.sigmoid(F.relu(node_features))
 
         return self.final_layer(node_features)
     
