@@ -1,6 +1,6 @@
 import torch
 import os
-from torch_geometric.datasets import TUDataset, ZINC, Planetoid, WikipediaNetwork, IMDB, DBLP, AMiner
+from torch_geometric.datasets import TUDataset, ZINC, Planetoid, WikipediaNetwork, IMDB, DBLP, AMiner, Flickr, WebKB
 from torch_geometric.loader import DataLoader
 
 def load_dataset(name, path='../data', train_size=None, test_size=None, eval_size=None, batch_size=32):
@@ -39,8 +39,49 @@ def load_dataset(name, path='../data', train_size=None, test_size=None, eval_siz
         return dataset, data, data, 'node'
 
     elif name in ['CORNELL', 'WISCONSIN']:
-        dataset = WikipediaNetwork(root=os.path.join(path, 'WebKB'), name=name.lower(), geom_gcn_preprocess=True)
+        dataset = WebKB(root=os.path.join(path, 'WebKB'), name=name.lower())
         data = dataset[0]
+        torch.manual_seed(1712)
+        num_nodes = data.num_nodes
+        perm = torch.randperm(num_nodes)
+        if train_size:
+            train_idx = perm[:train_size]
+            data.train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.train_mask[train_idx] = True
+        if eval_size:
+            val_idx = perm[train_size:train_size + eval_size]
+            data.val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.val_mask[val_idx] = True
+        if test_size:
+            test_idx = perm[train_size + eval_size:train_size + eval_size + test_size]
+            data.test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.test_mask[test_idx] = True
+        return dataset, data, data, 'node'
+    
+    elif name in ['CHAMELEON', 'SQUIRREL', 'CROCODILE']:
+        dataset = dataset = WikipediaNetwork(root=os.path.join(path, 'Wiki'),name=name.lower(), geom_gcn_preprocess=True if name != 'CROCODILE' else False) 
+        data = dataset[0]
+        torch.manual_seed(1712)
+        num_nodes = data.num_nodes
+        perm = torch.randperm(num_nodes)
+        if train_size:
+            train_idx = perm[:train_size]
+            data.train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.train_mask[train_idx] = True
+        if eval_size:
+            val_idx = perm[train_size:train_size + eval_size]
+            data.val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.val_mask[val_idx] = True
+        if test_size:
+            test_idx = perm[train_size + eval_size:train_size + eval_size + test_size]
+            data.test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            data.test_mask[test_idx] = True
+        return dataset, data, data, 'node'
+    
+    elif name == 'FLICKR':
+        dataset = Flickr(root=os.path.join(path, 'Flickr'))
+        data = dataset[0]
+        task_type = 'node'
         return dataset, data, data, 'node'
     
     elif name == 'IMDB':
@@ -98,7 +139,17 @@ def eval_dataset(name, path='../data', eval_size=None, batch_size=32, seed=1309)
         task_type = 'node'
 
     elif name in ['CORNELL', 'WISCONSIN']:
-        dataset = WikipediaNetwork(root=os.path.join(path, 'WebKB'), name=name.lower(), geom_gcn_preprocess=True)
+        dataset = WebKB(root=os.path.join(path, 'WebKB'), name=name.lower())
+        eval_loader = dataset[0]
+        task_type = 'node'
+        
+    elif name in ['CHAMELEON', 'SQUIRREL', 'CROCODILE']:
+        dataset = WikipediaNetwork(root=os.path.join(path, 'Wiki'),name=name.lower(), geom_gcn_preprocess=True if name != 'CROCODILE' else False) 
+        eval_loader = dataset[0]
+        task_type = 'node'
+        
+    elif name == 'FLICKR':
+        dataset = Flickr(root='data/Flickr')
         eval_loader = dataset[0]
         task_type = 'node'
     

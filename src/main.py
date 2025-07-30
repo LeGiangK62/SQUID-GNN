@@ -118,6 +118,7 @@ def main(args):
     # Model metadata
     if het_node_type is None:
         node_input_dim = dataset[0].x.shape[1] if dataset[0].x is not None else 0
+        print(dataset[0].edge_attr)
         edge_input_dim = dataset[0].edge_attr.shape[1] if dataset[0].edge_attr is not None else 0
         num_classes = dataset.num_classes
     else:
@@ -339,11 +340,11 @@ def main(args):
     print(f"\n ===={timestamp}==== ")
     
     if args.pre_train is not None:
-        pre_trained_path = os.path.join(result_dir, 'model', f"model_{args.pre_train}.pt")
+        pre_trained_path = os.path.join(result_dir, 'model', f"{args.dataset.lower()}_model_{args.pre_train}.pt")
         checkpoint = torch.load(pre_trained_path, map_location='cpu')
         model.load_state_dict(checkpoint['model_state_dict'])
         
-        pre_train_npz_path = os.path.join(result_dir, 'train_plot', f"data_{args.pre_train}.npz")
+        pre_train_npz_path = os.path.join(result_dir, 'train_plot', f"{args.dataset.lower()}_data_{args.pre_train}.npz")
         pre_train_data = np.load(pre_train_npz_path)
         pre_train_epoch = pre_train_data['epoch'].shape[0]          
         train_losses = pre_train_data['train_losses'].tolist()
@@ -429,6 +430,14 @@ def main(args):
                 if args.save_model:
                     # early_stopping(test_losses[-1], model)
                     save_checkpoint(model, optimizer, model_save)
+                np.savez_compressed(
+                    npz_path, 
+                    epoch=np.arange(1, epoch+2),
+                    train_losses=np.array(train_losses),
+                    test_losses=np.array(test_losses),
+                    train_accs=np.array(train_accs),
+                    test_accs=np.array(test_accs),
+                )
                                         
                 scheduler.step(test_metrics['val']['loss'])
                 if epoch % step_plot == 0:
