@@ -118,7 +118,6 @@ def main(args):
     # Model metadata
     if het_node_type is None:
         node_input_dim = dataset[0].x.shape[1] if dataset[0].x is not None else 0
-        print(dataset[0].edge_attr)
         edge_input_dim = dataset[0].edge_attr.shape[1] if dataset[0].edge_attr is not None else 0
         num_classes = dataset.num_classes
     else:
