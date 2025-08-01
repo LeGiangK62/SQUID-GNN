@@ -2,8 +2,8 @@ import torch
 import random
 from collections import defaultdict
 # from torchmetrics.classification import MulticlassF1Score
-
-
+from torch_geometric.transforms import NormalizeFeatures, RandomNodeSplit, Compose
+from torch_geometric.utils import degree
 def star_subgraph(adjacency_matrix, subgraph_size=4):
     num_nodes = adjacency_matrix.shape[0]
     subgraph_indices = []
@@ -144,3 +144,90 @@ def save_checkpoint(model, optimizer, save_path):
     }
     torch.save(checkpoint, save_path)
 
+
+class EarlyStopping:
+    def __init__(self, patience=10, delta=0.0, save_path="best_model.pt"):
+        self.patience = patience
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.delta = delta
+        self.save_path = save_path
+
+    def __call__(self, val_loss, model):
+        score = -val_loss
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(model)
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(model)
+            self.counter = 0
+
+    def save_checkpoint(self, model):
+        torch.save(model.state_dict(), self.save_path)
+
+class ToFloat:
+    def __call__(self, data):
+        data.x = data.x.float()             
+        if data.edge_attr is not None:
+            data.edge_attr = data.edge_attr.float()
+        return data
+    
+class FixZINC(ToFloat):
+    def __call__(self, data):
+        data = super().__call__(data)  
+        data.y = data.y.view(-1, 1)
+        return data
+    
+
+class ConstantX(object):
+    def __call__(self, data):
+        if data.x is None:                            
+            data.x = torch.ones((data.num_nodes, 1),
+                                 dtype=torch.float)
+        return data
+    
+
+class DegreeX(object):
+    def __call__(self, data):
+        if data.x is None:
+            deg = degree(data.edge_index[0],
+                         data.num_nodes,
+                         dtype=torch.float)            
+            data.x = deg.view(-1, 1)                  
+        return data
+
+class OneHotDegree(object):
+    def __call__(self, data):
+        if data.x is None:
+            deg = degree(data.edge_index[0],
+                         data.num_nodes).long()     
+            num_classes = int(deg.max().item()) + 1
+            data.x = torch.nn.functional.one_hot(deg,
+                                                 num_classes)\
+                                         .to(torch.float)
+        return data
+    
+
+class WebKBPreprocess(object):
+    def __init__(self,
+                 num_train_per_class: int = 20,
+                 val_ratio: float = 0.2,
+                 test_ratio: float = 0.2,
+                 split: str = 'train_rest'):
+        self.transform = Compose([
+            NormalizeFeatures(),
+            RandomNodeSplit(num_train_per_class=num_train_per_class,
+                            num_val=val_ratio,
+                            num_test=test_ratio,
+                            split=split,
+                            key='train_mask')
+        ])
+
+    def __call__(self, data):
+        return self.transform(data)

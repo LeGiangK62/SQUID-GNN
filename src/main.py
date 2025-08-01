@@ -56,6 +56,9 @@ def get_args():
     parser.add_argument('--save_model', action='store_true', help='Enable saving model')
     parser.add_argument('--gradient', action='store_true', help='Enable gradient saving')
     parser.add_argument('--results', action='store_true', help='Evaluate results')
+    parser.add_argument('--criterion', type=str, default='crossentropy',
+                        choices=['crossentropy', 'MSE', 'BCE', 'L1', 'NLL'],
+                        help="Which loss function to train model")
     
     # For switching between models
     parser.add_argument('--model', type=str, default='qgnn', 
@@ -274,8 +277,36 @@ def main(args):
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-    criterion = nn.CrossEntropyLoss()
+    if args.criterion == 'crossentropy':
+        criterion = nn.CrossEntropyLoss()
+    elif args.criterion == 'MSE':
+        criterion = nn.MSELoss()
+    elif args.criterion == 'BCE':
+        criterion = nn.BCEWithLogitsLoss()
+    elif args.criterion == 'L1':
+        criterion = nn.L1Loss()
+    elif args.criterion == 'NLL':
+        criterion  = nn.NLLLoss()
+    else:
+        raise ValueError(f"Unssuported loss function")
+    # criterion = nn.NLLLoss() ## MUTAG
 
+    ## Note: For debugging purposes, you can uncomment the following lines to print model details. 
+    # ##
+    # print("=" * 50)
+    # print(f"Training on dataset: {args.dataset.upper()}")
+    # print(f"Node feature dimension: {node_input_dim}")
+    # print(f"Edge feature dimension: {edge_input_dim}")
+    # print(f"Number of classes: {num_classes}")
+    # print(f"Number of training samples: {len(train_loader.dataset)}")
+    # print(f"Number of testing samples: {len(test_loader.dataset)}")
+    # print(f"QGNN layers: {args.num_gnn_layers}")
+    # print(f"Entangling layers per PQC: {args.num_ent_layers}")
+    # print(f"Total qubits: {n_qubits} (Node qubits: {args.node_qubit}, Edge qubits: {edge_qubit})")
+    # print(f"Epochs: {args.epochs}")
+    # print(f"Batch size: {args.batch_size}")
+    # print(f"Learning rate: {args.lr}")
+    # print("=" * 50)
 
     train_losses = []
     test_losses = []
