@@ -95,41 +95,39 @@ def test_graph(model, loader, criterion, device, num_classes=0):
     acc = correct / len(loader.dataset)
     return total_loss / len(loader.dataset), acc, f1
 
-# @torch.no_grad()
-# def get_predictions(model, loader):
-#     model.eval()
-#     all_preds = []
-#     all_labels = []
-#     for data in loader:
-#         data = data.to(device)
-#         out = model(data.x, data.edge_attr, data.edge_index, data.batch)
-#         preds = out.argmax(dim=1)
-#         all_preds.append(preds.cpu())
-#         all_labels.append(data.y.cpu())
-#     return torch.cat(all_preds), torch.cat(all_labels)
 
-def train_node(model, optimizer, data, criterion, device):
+def train_node(model, optimizer, data, criterion, device, het_node_type=None):
     model.train()
     data = data.to(device)
     optimizer.zero_grad()
-    out = model(data.x, data.edge_attr, data.edge_index, batch=None)  # batch is unused
-    loss = criterion(out[data.train_mask], data.y[data.train_mask])
+    if het_node_type is None:
+        out = model(data.x, data.edge_attr, data.edge_index, batch=None)  # batch is unused
+        loss = criterion(out[data.train_mask], data.y[data.train_mask])
+    else:
+        out = model(data.x_dict, None, data.edge_index_dict)
+        target = data[het_node_type]
+        loss = criterion(out[target.train_mask], target.y[target.train_mask])
     loss.backward()
     optimizer.step()
     return float(loss)
 
 @torch.no_grad()
-def test_node(model, data, criterion, device, num_classes=0):
+def test_node(model, data, criterion, device, het_node_type=None):
     model.eval()
     data = data.to(device)
-    out = model(data.x, data.edge_attr, data.edge_index, batch=None)
+    if het_node_type is None:
+        out = model(data.x, data.edge_attr, data.edge_index, batch=None)
+        target = data
+    else:
+        out = model(data.x_dict, None, data.edge_index_dict)
+        target = data[het_node_type]
 
     results = {}
     for split in ['train', 'val', 'test']:
-        mask = getattr(data, f'{split}_mask')
-        loss = criterion(out[mask], data.y[mask])
+        mask = target[f'{split}_mask']
+        loss = criterion(out[mask], target.y[mask])
         pred = out[mask].argmax(dim=1)
-        correct = (pred == data.y[mask]).sum().item()
+        correct = (pred == target.y[mask]).sum().item()
         acc = correct / mask.sum().item()
 
         results[split] = {

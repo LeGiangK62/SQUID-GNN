@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import MLP, GINConv, GCNConv, GATConv, SAGEConv, TransformerConv, global_add_pool, global_mean_pool
+from torch_geometric.nn import MLP, HeteroConv, GraphConv, GINConv, GCNConv, GATConv, SAGEConv, TransformerConv, global_add_pool, global_mean_pool
 
 class GIN_Node(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
@@ -20,25 +20,6 @@ class GIN_Node(nn.Module):
         x = self.dropout(x)
         return self.classifier(x)
     
-
-
-class GCN_Node(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
-        super().__init__()
-        self.convs = nn.ModuleList()
-        for i in range(num_layers):
-            in_ch  = in_channels if i==0 else hidden_channels
-            out_ch = out_channels  if i==num_layers-1 else hidden_channels
-            self.convs.append(GCNConv(in_ch, out_ch))
-        self.dropout = nn.Dropout(0.1)
-
-    def forward(self, x, edge_attr, edge_index, batch=None):
-        for conv in self.convs[:-1]:
-            x = F.sigmoid(conv(x, edge_index))
-        x = self.dropout(x)
-        # last layer, no activation
-        return self.convs[-1](x, edge_index)
-
 
 class GAT_Node(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels,
@@ -65,27 +46,61 @@ class GAT_Node(nn.Module):
         x = self.dropout(x)
         return self.convs[-1](x, edge_index)
     
+# class GraphSAGE_Node(torch.nn.Module):
+#     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout=0.5):
+#         super().__init__()
+#         self.convs = torch.nn.ModuleList()
+#         # tầng đầu
+#         self.convs.append(SAGEConv(in_channels, hidden_channels))
+#         # các tầng ẩn
+#         for _ in range(num_layers - 2):
+#             self.convs.append(SAGEConv(hidden_channels, hidden_channels))
+#         # tầng đầu ra
+#         self.convs.append(SAGEConv(hidden_channels, out_channels))
+#         self.dropout = dropout
+
+#     def forward(self, x, edge_attr,edge_index, batch=None):
+#         for i, conv in enumerate(self.convs):
+#             x = conv(x, edge_index)
+#             if i != len(self.convs) - 1:
+#                 x = F.relu(x)
+#                 x = F.dropout(x, p=self.dropout, training=self.training)
+#         return x
+
+class Transformer_Node(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, heads=1):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        for i in range(num_layers):
+            in_dim = in_channels if i == 0 else hidden_channels * heads
+            self.convs.append(TransformerConv(in_dim, hidden_channels, heads=heads))
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_channels * heads, out_channels)
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        for conv in self.convs:
+            x = F.relu(conv(x, edge_index))
+            x = self.dropout(x)
+        return self.classifier(x)
+    
 class GraphSAGE_Node(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout=0.5):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
         super().__init__()
         self.convs = torch.nn.ModuleList()
-        # tầng đầu
-        self.convs.append(SAGEConv(in_channels, hidden_channels))
-        # các tầng ẩn
-        for _ in range(num_layers - 2):
-            self.convs.append(SAGEConv(hidden_channels, hidden_channels))
-        # tầng đầu ra
-        self.convs.append(SAGEConv(hidden_channels, out_channels))
-        self.dropout = dropout
+        for i in range(num_layers):
+            in_ch  = in_channels if i==0 else hidden_channels
+            out_ch = hidden_channels #out_channels  if i==num_layers-1 else hidden_channels
+            self.convs.append(SAGEConv(in_ch, out_ch))
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
 
-    def forward(self, x, edge_attr,edge_index, batch=None):
-        for i, conv in enumerate(self.convs):
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        for conv in self.convs:
             x = conv(x, edge_index)
-            if i != len(self.convs) - 1:
-                x = F.relu(x)
-                x = F.dropout(x, p=self.dropout, training=self.training)
-        return x
-
+        x = F.relu(x)
+        x = self.dropout(x)
+        return self.classifier(x)
+    
 ## NOTE: Graph Task
 # class MLP(nn.Module):
 #     def __init__(self, in_dim, hidden_dim, num_layers):
@@ -200,3 +215,127 @@ class Transformer_Graph(nn.Module):
             x = self.dropout(x)
         x = global_add_pool(x, batch)
         return self.classifier(x)
+    
+    
+##
+class GIN_MUTAG(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        for i in range(num_layers):
+            in_dim = in_channels if i == 0 else hidden_channels
+            # mlp = MLP(in_dim,
+            #            hidden_channels, hidden_channels)
+            mlp = MLP([in_channels if i==0 else hidden_channels,
+                       hidden_channels, hidden_channels])
+            self.convs.append(GINConv(nn=mlp, train_eps=False))
+        self.dropout = nn.Dropout(0.5)
+        self.lin1 = nn.Linear(hidden_channels, hidden_channels)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        for conv in self.convs:
+            x = conv(x, edge_index)
+        x = global_add_pool(x, batch)
+        x = F.relu(self.lin1(x))
+        x = self.dropout(x)
+        return F.log_softmax(self.classifier(x), dim=-1)
+    
+##
+class GCN_Node(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        for i in range(num_layers):
+            in_ch  = in_channels if i==0 else hidden_channels
+            out_ch = hidden_channels #out_channels  if i==num_layers-1 else hidden_channels
+            self.convs.append(GCNConv(in_ch, out_ch))
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        # for conv in self.convs[:-1]:
+        for conv in self.convs:
+            x = conv(x, edge_index)
+        x = F.sigmoid(x)
+        x = self.dropout(x)
+        # last layer, no activation
+        return self.classifier(x)
+
+class GNN_Node(nn.Module):
+    def __init__(self, name, in_channels, hidden_channels, out_channels, num_layers, heads=1):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        for i in range(num_layers):
+            if name == 'gin':
+                mlp = MLP([in_channels if i==0 else hidden_channels,
+                        hidden_channels, hidden_channels])
+                self.convs.append(GINConv(nn=mlp, train_eps=False))
+            elif name == 'gcn':
+                in_ch  = in_channels if i==0 else hidden_channels
+                out_ch = hidden_channels #out_channels  if i==num_layers-1 else hidden_channels
+                self.convs.append(GCNConv(in_ch, out_ch))
+            elif name == 'sage':
+                in_ch  = in_channels if i==0 else hidden_channels
+                out_ch = hidden_channels #out_channels  if i==num_layers-1 else hidden_channels
+                self.convs.append(SAGEConv(in_ch, out_ch))
+            elif name == 'trans':
+                in_dim = in_channels if i == 0 else hidden_channels
+                self.convs.append(TransformerConv(in_dim, hidden_channels//heads, heads=heads))
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        for conv in self.convs:
+            x = conv(x, edge_index)
+        x = F.relu(x)
+        x = self.dropout(x)
+        return self.classifier(x)
+    
+# Heterogeneous Graph
+
+class HeteroGNN_Node(nn.Module):
+    def __init__(self, name, node_name, metadata, in_channels, hidden_channels, out_channels, num_layers, heads=1):
+        super().__init__()
+        self.name = name
+        self.num_layers = num_layers
+        self.convs = nn.ModuleList()
+
+        for i in range(num_layers):
+            layer = HeteroConv(
+                {
+                    edge_type: self.build_conv(
+                        name=name,
+                        in_channels=in_channels if i == 0 else hidden_channels,
+                        out_channels=hidden_channels//(heads if name == 'trans' else 1),
+                        heads=heads
+                    )
+                    for edge_type in metadata[1]  # edge_types
+                },
+                aggr='sum'
+            )
+            self.convs.append(layer)
+
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def build_conv(self, name, in_channels, out_channels, heads=1):
+        if name == 'gin':
+            mlp = MLP([in_channels, out_channels, out_channels])
+            return GINConv(nn=mlp, train_eps=False)
+        elif name == 'gcn':
+            return GraphConv(in_channels, out_channels)
+        elif name == 'sage':
+            return SAGEConv(in_channels, out_channels)
+        elif name == 'trans':
+            return TransformerConv(in_channels, out_channels, heads=heads)
+        else:
+            raise ValueError(f"Unknown conv name: {name}")
+
+    def forward(self, x_dict, edge_attr_dict, edge_index_dict):
+        for conv in self.convs:
+            x_dict = conv(x_dict, edge_index_dict)
+            x_dict = {k: F.relu(v) for k, v in x_dict.items()}
+        x_dict = {k: self.dropout(v) for k, v in x_dict.items()}
+        return self.classifier(x_dict['movie']) 
+    
