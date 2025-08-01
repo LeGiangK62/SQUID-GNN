@@ -7,86 +7,6 @@ from torch_geometric.nn import MLP, global_add_pool, global_mean_pool, global_ma
 
 from utils import star_subgraph
 
-
-# def message_passing_pqc_aux(strong, twodesign, inits, wires):
-#     edge, center, neighbor, ancilla1, ancilla2 = wires
-#     ##
-#     # qml.StronglyEntanglingLayers(weights=strong[0], wires=[edge, center, neighbor])
-#     ##
-#     # qml.CRX(phi=inits[0,0],wires=[center, edge])
-#     # qml.CRX(phi=inits[0,1],wires=[center, neighbor])
-#     # qml.StronglyEntanglingLayers(weights=strong[0], wires=[edge, ancilla])
-#     # qml.StronglyEntanglingLayers(weights=strong[0], wires=[neighbor, ancilla])
-#     # qml.StronglyEntanglingLayers(weights=strong[0], wires=[center, ancilla])
-#     # qml.StronglyEntanglingLayers(weights=strong[1], wires=[edge, center])
-#     # qml.StronglyEntanglingLayers(weights=strong[2], wires=[center, neighbor])
-    
-#     ## only rotation
-#     qml.CRX(inits[0, 0], wires=[neighbor, ancilla1])
-#     qml.CRY(inits[0, 1], wires=[edge, ancilla1])
-#     qml.CRZ(inits[0, 2], wires=[neighbor, ancilla2])
-#     qml.CRY(inits[0, 3], wires=[edge, ancilla2])
-#     qml.StronglyEntanglingLayers(weights=strong[0], wires=[edge, neighbor, ancilla1])
-#     # qml.adjoint(qml.StronglyEntanglingLayers(weights=strong[0], wires=[edge, neighbor, ancilla1]))
-#     qml.StronglyEntanglingLayers(weights=strong[1], wires=[ancilla1, neighbor, ancilla2])
-#     # qml.adjoint(qml.StronglyEntanglingLayers(weights=strong[1], wires=[ancilla1, neighbor, ancilla2]))
-
-
-# def qgcn_enhance_layer_aux(inputs, spreadlayer, strong, twodesign, inits, update):
-#     edge_feat_dim = feat_dim = node_feat_dim = 2
-#     inputs = inputs.reshape(-1,feat_dim)
-    
-#     # The number of avaible nodes and edges
-#     total_shape = inputs.shape[0]
-#     num_nodes = (total_shape+1)//2
-#     num_edges = num_nodes - 1
-    
-#     adjacency_matrix, vertex_features = inputs[:num_edges,:], inputs[num_edges:,:]
-
-#     # The number of qubits assiged to each node and edge
-#     num_qbit = spreadlayer.shape[1]
-#     num_nodes_qbit = (num_qbit+1)//2
-#     num_edges_qbit = num_nodes_qbit - 1
-    
-#     center_wire = num_edges_qbit
-    
-    
-#     for i in range(num_edges):
-#         qml.RY(adjacency_matrix[i][0], wires=i)
-#         qml.RZ(adjacency_matrix[i][1], wires=i)
-#         # qml.RX(adjacency_matrix[i][2], wires=i)
-    
-#     for i in range(num_nodes):
-#         qml.RY(vertex_features[i][0], wires=center_wire+i)
-#         qml.RZ(vertex_features[i][1], wires=center_wire+i)
-#         # qml.RX(vertex_features[i][2], wires=center_wire+i)
-    
-    
-#     for i in range(num_edges):
-
-#         message_passing_pqc_aux(strong=strong, twodesign=twodesign, inits=inits, 
-#                             wires=[i, center_wire, center_wire+i+1, num_qbit, num_qbit+1])
-
-#     qml.StronglyEntanglingLayers(
-#         weights=update[0], 
-#         wires=[center_wire, num_qbit, num_qbit+1]
-#         )
-#     # probs = qml.probs(wires=[center_wire, num_qbit, num_qbit+1])
-#     # return probs
-#     # expval = [qml.expval(qml.PauliZ(w)) for w in [center_wire, num_qbit, num_qbit+1]]
-#     expval = [
-#         qml.expval(qml.PauliZ(center_wire)),
-#         # qml.expval(qml.PauliY(center_wire)),
-#         # qml.expval(qml.PauliZ(center_wire)),
-#         # qml.expval(qml.PauliX(num_qbit)),
-#         # qml.expval(qml.PauliY(num_qbit)),
-#         # qml.expval(qml.PauliZ(num_qbit)),
-#         # qml.expval(qml.PauliX(num_qbit+1)),
-#         # qml.expval(qml.PauliY(num_qbit+1)),
-#         # qml.expval(qml.PauliZ(num_qbit+1)),
-#     ]
-#     return expval
-
 ## Todo: New Approach, Message and Aggregate Seperate
 
 def message_passing_pqc(strong, twodesign, inits, wires):
@@ -341,20 +261,12 @@ class QGNNGraphClassifier(nn.Module):
             updates_node = torch.zeros_like(node_features)
             updates_node = updates_node.index_add(0, centers, updates)
             
-            # node_features = norm_layer(updates_node + node_features)    
-            # node_features = updates_node + node_features
-            # node_features = F.relu(norm_layer(updates_node + node_features)) # Add ReLU
-            # node_features = norm_layer(updates_node + node_features) # No ReLU
             node_features = norm_layer(updates_node) + node_features # No ReLU
-        # graph_embedding = global_mean_pool(node_features, batch)
+
         graph_embedding = global_add_pool(node_features, batch)
-        # graph_embedding = F.relu(graph_embedding)
-        
-        # return torch.sigmoid(self.graph_head(graph_embedding))
+
         return self.graph_head(graph_embedding)
-        # return F.log_softmax(self.graph_head(graph_embedding), dim=-1)
-        # return F.relu(self.graph_head(graph_embedding)) # Relu bahave shit?
-        # return torch.exp(-F.softplus(self.graph_head(graph_embedding))) 
+
     
     
 class QGNN_HetNodeClassifier(nn.Module):
@@ -451,7 +363,6 @@ class QGNN_HetNodeClassifier(nn.Module):
                 centers = []
                 updates = []
             
-                ## FIXME: #####################################
                 dst_indices = torch.unique(edge_index[:,1])
                 perm = torch.randperm(dst_indices.shape[0])
                 dst_indices = dst_indices[perm].tolist()
@@ -573,7 +484,6 @@ class QGNNNodeClassifier(nn.Module):
         node_features = self.input_node(node_features)
         
         node_features = input_process(node_features)
-        # # node_features = node_features + 0.01 * torch.randn_like(node_features)
         edge_features = input_process(edge_features)
         
         
@@ -614,12 +524,8 @@ class QGNNNodeClassifier(nn.Module):
             updates_node = torch.zeros_like(node_features)
             updates_node = updates_node.index_add(0, centers, updates)
             
-            # node_features = norm_layer(updates_node + node_features)    
-            # node_features = updates_node + node_features
-            # node_features = F.relu(norm_layer(updates_node + node_features)) # Add ReLU
             node_features = norm_layer(updates_node + node_features) # No ReLU
         node_features = F.sigmoid(node_features)
-        # node_features = F.sigmoid(F.relu(node_features))
 
         return self.final_layer(node_features)
     

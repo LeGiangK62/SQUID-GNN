@@ -95,18 +95,6 @@ def test_graph(model, loader, criterion, device, num_classes=0):
     acc = correct / len(loader.dataset)
     return total_loss / len(loader.dataset), acc, f1
 
-# @torch.no_grad()
-# def get_predictions(model, loader):
-#     model.eval()
-#     all_preds = []
-#     all_labels = []
-#     for data in loader:
-#         data = data.to(device)
-#         out = model(data.x, data.edge_attr, data.edge_index, data.batch)
-#         preds = out.argmax(dim=1)
-#         all_preds.append(preds.cpu())
-#         all_labels.append(data.y.cpu())
-#     return torch.cat(all_preds), torch.cat(all_labels)
 
 def train_node(model, optimizer, data, criterion, device, het_node_type=None):
     model.train()
@@ -155,31 +143,4 @@ def save_checkpoint(model, optimizer, save_path):
         'optimizer_state_dict': optimizer.state_dict(),
     }
     torch.save(checkpoint, save_path)
-
-
-class EarlyStopping:
-    def __init__(self, patience=10, delta=0.0, save_path="best_model.pt"):
-        self.patience = patience
-        self.counter = 0
-        self.best_score = None
-        self.early_stop = False
-        self.delta = delta
-        self.save_path = save_path
-
-    def __call__(self, val_loss, model):
-        score = -val_loss
-        if self.best_score is None:
-            self.best_score = score
-            self.save_checkpoint(model)
-        elif score < self.best_score + self.delta:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_score = score
-            self.save_checkpoint(model)
-            self.counter = 0
-
-    def save_checkpoint(self, model):
-        torch.save(model.state_dict(), self.save_path)
 

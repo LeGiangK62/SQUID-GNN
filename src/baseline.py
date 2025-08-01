@@ -21,25 +21,6 @@ class GIN_Node(nn.Module):
         return self.classifier(x)
     
 
-
-# class GCN_Node(nn.Module):
-#     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
-#         super().__init__()
-#         self.convs = nn.ModuleList()
-#         for i in range(num_layers):
-#             in_ch  = in_channels if i==0 else hidden_channels
-#             out_ch = out_channels  if i==num_layers-1 else hidden_channels
-#             self.convs.append(GCNConv(in_ch, out_ch))
-#         self.dropout = nn.Dropout(0.1)
-
-#     def forward(self, x, edge_attr, edge_index, batch=None):
-#         for conv in self.convs[:-1]:
-#             x = F.sigmoid(conv(x, edge_index))
-#         x = self.dropout(x)
-#         # last layer, no activation
-#         return self.convs[-1](x, edge_index)
-
-
 class GAT_Node(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels,
                  num_layers, heads=8, dropout=0.6):

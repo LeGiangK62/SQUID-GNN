@@ -7,7 +7,7 @@ from torch import nn, optim
 import numpy as np
 
 
-from utils import train_graph, test_graph, train_node, test_node, EarlyStopping, save_checkpoint 
+from utils import train_graph, test_graph, train_node, test_node, save_checkpoint 
 from data import load_dataset, eval_dataset, random_split
 from model import QGNNGraphClassifier, QGNNNodeClassifier
 from test import HandcraftGNN, HandcraftGNN_NodeClassification
@@ -247,30 +247,6 @@ def main(args):
                     num_layers=args.num_gnn_layers,
                     heads=8  # used only if name='trans'
                 )
-            # elif args.model == 'gin':
-            #     from baseline import GIN_Node
-            #     model = GIN_Node(
-            #         in_channels=node_input_dim,
-            #         hidden_channels=args.hidden_channels,
-            #         out_channels=num_classes,
-            #         num_layers=args.num_gnn_layers,
-            #     )
-            # elif args.model == 'sage':
-            #     from baseline import GraphSAGE_Node
-            #     model = GraphSAGE_Node(
-            #         in_channels=node_input_dim,
-            #         hidden_channels=args.hidden_channels,
-            #         out_channels=num_classes,
-            #         num_layers=args.num_gnn_layers
-            #     )
-            # elif args.model == 'gcn':
-            #     from baseline import GCN_Node
-            #     model = GCN_Node(
-            #         in_channels=node_input_dim,
-            #         hidden_channels=args.hidden_channels,
-            #         out_channels=num_classes,
-            #         num_layers=args.num_gnn_layers,
-            #     )
             elif args.model == 'gat':
                 from baseline import GAT_Node
                 model = GAT_Node(
@@ -299,24 +275,7 @@ def main(args):
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
     criterion = nn.CrossEntropyLoss()
-    # criterion = nn.NLLLoss() ## MUTAG - no need
 
-    ## Note: For debugging purposes, you can uncomment the following lines to print model details. 
-    # ##
-    # print("=" * 50)
-    # print(f"Training on dataset: {args.dataset.upper()}")
-    # print(f"Node feature dimension: {node_input_dim}")
-    # print(f"Edge feature dimension: {edge_input_dim}")
-    # print(f"Number of classes: {num_classes}")
-    # print(f"Number of training samples: {len(train_loader.dataset)}")
-    # print(f"Number of testing samples: {len(test_loader.dataset)}")
-    # print(f"QGNN layers: {args.num_gnn_layers}")
-    # print(f"Entangling layers per PQC: {args.num_ent_layers}")
-    # print(f"Total qubits: {n_qubits} (Node qubits: {args.node_qubit}, Edge qubits: {edge_qubit})")
-    # print(f"Epochs: {args.epochs}")
-    # print(f"Batch size: {args.batch_size}")
-    # print(f"Learning rate: {args.lr}")
-    # print("=" * 50)
 
     train_losses = []
     test_losses = []
