@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import MLP, HeteroConv, GraphConv, GINConv, GCNConv, GATConv, SAGEConv, TransformerConv, global_add_pool, global_mean_pool
+import pennylane as qml
+
 
 class GIN_Node(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
@@ -339,3 +341,147 @@ class HeteroGNN_Node(nn.Module):
         x_dict = {k: self.dropout(v) for k, v in x_dict.items()}
         return self.classifier(x_dict['movie']) 
     
+class QuantumMLP_Amplitude(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, n_q_layers=1):
+        super().__init__()
+        self.n_qubits = 3
+        self.to32 = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 2**self.n_qubits),
+        )
+        self.n_q_layers = n_q_layers
+
+        dev = qml.device("default.qubit", wires=self.n_qubits)
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
+        def circuit(inputs, weights):
+            # inputs: (32,)
+            qml.AmplitudeEmbedding(inputs, wires=range(self.n_qubits), normalize=True)
+
+            for l in range(self.n_q_layers):
+                for i in range(self.n_qubits):
+                    qml.Rot(weights[l, i, 0], weights[l, i, 1], weights[l, i, 2], wires=i)
+                for i in range(self.n_qubits):
+                    qml.CNOT(wires=[i, (i + 1) % self.n_qubits])
+            return qml.probs(wires=range(self.n_qubits))
+
+        weight_shapes = {"weights": (self.n_q_layers, self.n_qubits, 3)}
+        self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
+
+        self.post = nn.Sequential(
+            nn.Linear(2**self.n_qubits, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim),
+        )
+
+    def forward(self, x):
+        amps = self.to32(x)         
+        amps = torch.tanh(amps)
+
+        q_out = torch.stack([self.qlayer(a) for a in amps], dim=0)
+        return self.post(q_out)  
+
+class HQGNN_Graph(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
+                 n_q_layers=1):
+        super().__init__()
+        self.convs = nn.ModuleList()
+
+        for i in range(num_layers):
+            in_dim = in_channels if i == 0 else hidden_channels
+            qnn = QuantumMLP_Amplitude(
+                in_dim=in_dim,
+                hidden_dim=hidden_channels,
+                out_dim=hidden_channels,
+                n_q_layers=n_q_layers
+            )
+            self.convs.append(GINConv(nn=qnn, train_eps=False))
+
+        self.dropout = nn.Dropout(0.1)
+        self.lin1 = nn.Linear(hidden_channels, hidden_channels)
+        self.classifier = nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        for conv in self.convs:
+            x = conv(x, edge_index)
+
+        x = global_add_pool(x, batch)
+        x = F.relu(self.lin1(x))
+        x = self.dropout(x)
+        return F.log_softmax(self.classifier(x), dim=-1)
+    
+
+class QuantumMLP_Amp32(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, n_q_layers=1):
+        super().__init__()
+        self.to32 = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 32),
+        )
+
+        self.n_qubits = 5
+        self.n_q_layers = n_q_layers
+        dev = qml.device("default.qubit", wires=self.n_qubits)
+
+        # TorchLayer yêu cầu tham số dữ liệu tên "inputs"
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
+        def circuit(inputs, weights):
+            qml.AmplitudeEmbedding(inputs, wires=range(self.n_qubits), normalize=True)
+
+            for l in range(self.n_q_layers):
+                for i in range(self.n_qubits):
+                    qml.Rot(weights[l, i, 0], weights[l, i, 1], weights[l, i, 2], wires=i)
+                for i in range(self.n_qubits):
+                    qml.CNOT(wires=[i, (i + 1) % self.n_qubits])
+
+            return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
+
+        weight_shapes = {"weights": (self.n_q_layers, self.n_qubits, 3)}
+        self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
+
+        self.post = nn.Sequential(
+            nn.Linear(self.n_qubits, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim),
+        )
+
+    def forward(self, x):
+        amps = self.to32(x)            
+        amps = torch.tanh(amps)
+        q_out = torch.stack([self.qlayer(a) for a in amps], dim=0) 
+        return self.post(q_out)
+
+
+class HQGNN_Node(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
+                 n_q_layers=1, dropout_p=0.1, act="relu"):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        self.dropout = nn.Dropout(dropout_p)
+        self.act = act
+
+        for i in range(num_layers):
+            in_dim = in_channels if i == 0 else hidden_channels
+            out_dim = out_channels if i == num_layers - 1 else hidden_channels
+
+            qnn = QuantumMLP_Amp32(
+                in_dim=in_dim,
+                hidden_dim=hidden_channels,
+                out_dim=out_dim,
+                n_q_layers=n_q_layers
+            )
+            self.convs.append(GINConv(nn=qnn, train_eps=False))
+
+    def forward(self, x, edge_attr, edge_index, batch=None):
+        for conv in self.convs[:-1]:
+            x = conv(x, edge_index)
+
+            if self.act == "sigmoid":
+                x = torch.sigmoid(x)
+            else:
+                x = F.relu(x)
+
+            x = self.dropout(x)
+        x = self.convs[-1](x, edge_index)
+        return x

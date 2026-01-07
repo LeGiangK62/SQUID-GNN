@@ -62,7 +62,7 @@ def get_args():
     
     # For switching between models
     parser.add_argument('--model', type=str, default='qgnn', 
-                        choices=['qgnn', 'handcraft', 'gin', 'gcn', 'gat', 'sage', 'trans'],
+                        choices=['qgnn', 'handcraft', 'gin', 'gcn', 'gat', 'sage', 'trans', 'hqgnn'],
                         help="Which model to run"
                         )
     parser.add_argument('--graphlet_size', type=int, default=10)
@@ -145,6 +145,14 @@ def main(args):
                 hop_neighbor=args.num_gnn_layers,
                 num_classes=num_classes,
                 one_hot=0
+            )
+        elif args.model == 'hqgnn':
+            from baseline import HQGNN_Graph
+            model = HQGNN_Graph(
+                in_channels=node_input_dim,
+                hidden_channels=args.hidden_channels,
+                out_channels=num_classes,
+                num_layers=args.num_gnn_layers,
             )
         elif args.model == 'handcraft':
             model = HandcraftGNN(
@@ -239,6 +247,14 @@ def main(args):
                     hop_neighbor=args.num_gnn_layers,
                     num_classes=num_classes,
                     one_hot=0
+                )
+            elif args.model == 'hqgnn':
+                from baseline import HQGNN_Node
+                model = HQGNN_Node(
+                    in_channels=node_input_dim,
+                    hidden_channels=args.hidden_channels,
+                    out_channels=num_classes,
+                    num_layers=args.num_gnn_layers,
                 )
             elif args.model in ['gin', 'sage', 'gcn', 'trans']:
                 from baseline import GNN_Node
