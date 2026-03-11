@@ -675,5 +675,160 @@ class QGNN_MUTAG(nn.Module):
             node_features = norm_layer(updates_node) + node_features # No ReLU
         graph_embedding = global_add_pool(node_features, batch)
         graph_embedding = F.relu(graph_embedding)
-        
+
         return F.log_softmax(self.graph_head(graph_embedding), dim=-1)
+
+
+class QGNNGraphClassifier_Batched(nn.Module):
+    """
+    Vectorized version of QGNNGraphClassifier.
+
+    Key optimization: instead of calling q_layer once per center node
+    (N_nodes × hop_neighbor total QNode calls), we:
+      1. Pre-build all subgraph inputs and pad them to a fixed size.
+      2. Stack them into a single batch tensor [N_centers, flat_input_size].
+      3. Call q_layer ONCE per hop with the full batch, using PennyLane's
+         qml.batch_input transform for batched device execution.
+      4. Run upd_layer (MLP) once on the whole batch in one go.
+
+    Total QNode calls: hop_neighbor  (vs. N_nodes × hop_neighbor before).
+
+    Note: requires PennyLane >= 0.30 and a device that supports batch_input
+    (default.qubit, lightning.qubit, etc.).
+    """
+
+    def __init__(self, q_dev, w_shapes, hidden_dim, node_input_dim=1, edge_input_dim=1,
+                 graphlet_size=4, hop_neighbor=1, num_classes=2, one_hot=0):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.graphlet_size = graphlet_size
+        self.one_hot = one_hot
+        self.hop_neighbor = hop_neighbor
+        self.pqc_dim = 2
+        self.chunk = 1
+        self.final_dim = self.pqc_dim * self.chunk
+        self.pqc_out = 3
+        print(f"Hidden dim: {self.hidden_dim}")
+
+        self.qconvs = nn.ModuleDict()
+        self.upds = nn.ModuleDict()
+        self.norms = nn.ModuleDict()
+
+        if self.one_hot:
+            self.node_input_dim = 1
+            self.edge_input_dim = 1
+        else:
+            self.node_input_dim = node_input_dim
+            self.edge_input_dim = edge_input_dim if edge_input_dim > 0 else 1
+
+        self.input_node = MLP(
+            [self.node_input_dim, self.hidden_dim, self.final_dim],
+            act='leaky_relu', norm='batch_norm', dropout=0.0
+        )
+        self.input_edge = MLP(
+            [self.edge_input_dim, self.hidden_dim, self.pqc_dim],
+            act='leaky_relu', norm='batch_norm', dropout=0.0
+        )
+
+        for i in range(self.hop_neighbor):
+            # Wrap QNode with batch_input so a [N, flat_size] tensor is
+            # processed in one batched device execution instead of N calls.
+            qnode = qml.batch_input(
+                qml.QNode(qgcn_enhance_layer, q_dev, interface="torch"),
+                argnum=0
+            )
+            self.qconvs[f"lay{i+1}"] = qml.qnn.TorchLayer(qnode, w_shapes, uniform_pi_init)
+
+            self.upds[f"lay{i+1}"] = MLP(
+                [self.pqc_dim + self.pqc_out, self.hidden_dim, self.pqc_dim],
+                act='leaky_relu', norm=None, dropout=0.4
+            )
+            self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
+
+        self.graph_head = MLP(
+            [self.final_dim, self.hidden_dim, self.hidden_dim, num_classes],
+            act='leaky_relu', norm='batch_norm', dropout=0.1
+        )
+
+    def sampling_neighbors(self, neighbor_ids, edge_ids):
+        if neighbor_ids.numel() > self.graphlet_size - 1:
+            perm = torch.randperm(neighbor_ids.numel())[:self.graphlet_size - 1]
+            neighbor_ids = neighbor_ids[perm]
+            edge_ids = edge_ids[perm]
+        return neighbor_ids, edge_ids
+
+    def _build_subgraph_input(self, center, node_features, edge_features, edge_index):
+        """
+        Build a *fixed-size* flat input tensor for one center node.
+        Pads to graphlet_size edges and graphlet_size nodes with zeros so that
+        all centers produce the same flat_input_size and can be batched.
+        """
+        neighbor_mask = (edge_index[:, 1] == center)
+        neighbor_ids = edge_index[:, 0][neighbor_mask]
+        edge_ids = torch.nonzero(neighbor_mask, as_tuple=False).squeeze()
+        neighbor_ids, edge_ids = self.sampling_neighbors(neighbor_ids, edge_ids)
+
+        center_ft = node_features[center]
+        neighbors = node_features[neighbor_ids]
+        n_feat = torch.cat([center_ft.unsqueeze(0), neighbors], dim=0)
+        e_feat = edge_features[edge_ids.view(-1)]
+
+        num_edges_model = self.graphlet_size - 1
+        num_nodes_model = self.graphlet_size
+
+        # Zero-pad missing edges / nodes to fixed graphlet_size
+        if e_feat.shape[0] < num_edges_model:
+            pad = torch.zeros(num_edges_model - e_feat.shape[0], self.pqc_dim,
+                              device=e_feat.device)
+            e_feat = torch.cat([e_feat, pad], dim=0)
+
+        if n_feat.shape[0] < num_nodes_model:
+            pad = torch.zeros(num_nodes_model - n_feat.shape[0], self.pqc_dim,
+                              device=n_feat.device)
+            n_feat = torch.cat([n_feat, pad], dim=0)
+
+        # Layout matches qgcn_enhance_layer expectation: [edges | nodes] flattened
+        return torch.cat([e_feat, n_feat], dim=0).flatten()
+
+    def forward(self, node_feat, edge_attr, edge_index, batch):
+        edge_index = edge_index.t()
+
+        if edge_attr is None:
+            edge_attr = torch.ones((edge_index.size(0), self.edge_input_dim),
+                                   device=node_feat.device)
+
+        edge_features = self.input_edge(edge_attr.float())
+        node_features = self.input_node(node_feat.float())
+        node_features = input_process(node_features)
+        edge_features = input_process(edge_features)
+
+        for i in range(self.hop_neighbor):
+            q_layer = self.qconvs[f"lay{i+1}"]
+            upd_layer = self.upds[f"lay{i+1}"]
+            norm_layer = self.norms[f"lay{i+1}"]
+
+            dst_indices = torch.unique(edge_index[:, 1])
+            perm = torch.randperm(dst_indices.shape[0])
+            dst_indices = dst_indices[perm]  # keep as tensor for index_add
+
+            # ── Build batch of subgraph inputs ──────────────────────────────
+            # Python loop only over cheap tensor-indexing; QNode is NOT called here.
+            all_inputs = torch.stack([
+                self._build_subgraph_input(int(c), node_features, edge_features, edge_index)
+                for c in dst_indices
+            ], dim=0)  # [N_centers, flat_input_size]
+
+            # ── Single batched QNode call ────────────────────────────────────
+            # qml.batch_input executes the circuit for every row in one shot.
+            all_msgs = q_layer(all_inputs)  # [N_centers, pqc_out]
+
+            # ── Vectorized MLP update (one call for the full batch) ──────────
+            center_feats = node_features[dst_indices]  # [N_centers, pqc_dim]
+            updates = upd_layer(torch.cat([center_feats, all_msgs], dim=1))  # [N_centers, pqc_dim]
+
+            updates_node = torch.zeros_like(node_features)
+            updates_node = updates_node.index_add(0, dst_indices, updates)
+            node_features = norm_layer(updates_node) + node_features
+
+        graph_embedding = global_add_pool(node_features, batch)
+        return self.graph_head(graph_embedding)

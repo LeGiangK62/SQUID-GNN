@@ -3,6 +3,8 @@ import os
 from torch_geometric.datasets import TUDataset, ZINC, Planetoid, WikipediaNetwork, IMDB, DBLP, AMiner, Flickr, WebKB
 from torch_geometric.loader import DataLoader
 from utils import FixZINC, ConstantX, DegreeX, WebKBPreprocess
+from ogb.nodeproppred import PygNodePropPredDataset
+from ogb.graphproppred import PygGraphPropPredDataset
 
 def load_dataset(name, path='../data', train_size=None, test_size=None, eval_size=None, batch_size=32):
     name = name.upper()
@@ -103,6 +105,56 @@ def load_dataset(name, path='../data', train_size=None, test_size=None, eval_siz
         dataset = AMiner(root=os.path.join(path, 'AMiner'))
         data = dataset[0]
         return dataset, data, data, 'node-het-author'
+
+    elif name in ['OGBN-ARXIV', 'OGBG-MOLHIV']:
+        # Fix for PyTorch 2.6+ security restriction on legacy OGB files
+        # We temporarily patch torch.load to allow weights_only=False
+        _orig_load = torch.load
+        def unsafe_load(*args, **kwargs):
+            if 'weights_only' not in kwargs:
+                kwargs['weights_only'] = False
+            return _orig_load(*args, **kwargs)
+        
+        torch.load = unsafe_load
+        
+        try:
+            if name == 'OGBN-ARXIV':
+                dataset = PygNodePropPredDataset(name='ogbn-arxiv', root=os.path.join(path, 'ogb'))
+                data = dataset[0]
+                split_idx = dataset.get_idx_split()
+                
+                # Convert OGB split indices to boolean masks for consistency with your other node datasets
+                num_nodes = data.num_nodes
+                data.train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+                data.val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+                data.test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+                
+                data.train_mask[split_idx['train']] = True
+                data.val_mask[split_idx['valid']] = True
+                data.test_mask[split_idx['test']] = True
+                
+                # Flatten labels from (N, 1) to (N,) which is standard for PyG
+                if data.y is not None:
+                    data.y = data.y.squeeze()
+                
+                return dataset, data, data, 'node'
+
+            elif name == 'OGBG-MOLHIV':
+                dataset = PygGraphPropPredDataset(name='ogbg-molhiv', root=os.path.join(path, 'ogb'))
+                split_idx = dataset.get_idx_split()
+                
+                # Use OGB official splits
+                train_dataset = dataset[split_idx['train']]
+                test_dataset = dataset[split_idx['test']]
+                
+                train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+                test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+                
+                return dataset, train_loader, test_loader, 'graph'
+
+        finally:
+            # Always restore the original secure torch.load
+            torch.load = _orig_load
 
     else:
         raise ValueError(f"Dataset '{name}' not supported.")
