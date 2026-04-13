@@ -54,15 +54,19 @@ def star_subgraph(adjacency_matrix, subgraph_size=4):
 
 def train_graph(model, optimizer, loader, criterion, device):
     model.train()
+    is_bce = isinstance(criterion, torch.nn.BCEWithLogitsLoss)
     total_loss = 0
     for data in loader:
         data = data.to(device)
         optimizer.zero_grad()
         out = model(data.x, data.edge_attr, data.edge_index, data.batch)
-        loss = criterion(out, data.y)
+        if is_bce:
+            loss = criterion(out.squeeze(), data.y.float().squeeze())
+        else:
+            loss = criterion(out, data.y)
         loss.backward()
         optimizer.step()
-        total_loss += float(loss)  * data.num_graphs
+        total_loss += float(loss) * data.num_graphs
     return total_loss / len(loader.dataset)
 
 

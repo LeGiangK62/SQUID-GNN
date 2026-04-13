@@ -151,6 +151,8 @@ def load_dataset(name, path='../data', train_size=None, test_size=None, eval_siz
                 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
                 
                 return dataset, train_loader, test_loader, 'graph'
+            
+            ## TODO: Add other dataset with edge
 
         finally:
             # Always restore the original secure torch.load

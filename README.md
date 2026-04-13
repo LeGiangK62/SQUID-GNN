@@ -25,8 +25,10 @@ Run training with:
 ```bash
 !python main.py --task graph --dataset MUTAG  --epochs 50 --lr 0.005 --step_size 10 --gamma 0.9\
 --train_size 100 --test_size 50 --eval_size 100 --seed 1309\
---model gin --num_gnn_layers 3 --hidden_channels 128  \
+--model qgnn --num_gnn_layers 3 --hidden_channels 128  \
 --results --plot --gradient --save_model 
+
+python main.py --task graph --dataset MUTAG --model qgnn --graphlet_size 4 --hidden_channels 64 --epochs 50 --lr 0.005 --step_size 10 --gamma 0.9 --train_size 100 --num_ent_layers 1 --num_gnn_layers 3 --save_model --plot  --results  
 ```
 
 ### Parameters

@@ -9,7 +9,7 @@ import numpy as np
 
 from utils import train_graph, test_graph, train_node, test_node, save_checkpoint 
 from data import load_dataset, eval_dataset, random_split
-from model import QGNNGraphClassifier, QGNNNodeClassifier
+from model import QGNNGraphClassifier_Batched as QGNNGraphClassifier, QGNNNodeClassifier
 from test import HandcraftGNN, HandcraftGNN_NodeClassification
 
 from datetime import datetime
@@ -56,6 +56,8 @@ def get_args():
     parser.add_argument('--save_model', action='store_true', help='Enable saving model')
     parser.add_argument('--gradient', action='store_true', help='Enable gradient saving')
     parser.add_argument('--results', action='store_true', help='Evaluate results')
+    parser.add_argument('--no_Edge', action='store_true', default=False, help='Omit edge attributes')
+    parser.add_argument('--count_params', action='store_true', help='Print number of model parameters and exit')
     parser.add_argument('--criterion', type=str, default='crossentropy',
                         choices=['crossentropy', 'MSE', 'BCE', 'L1', 'NLL'],
                         help="Which loss function to train model")
@@ -72,15 +74,17 @@ def get_args():
 
 
 def main(args):
+    aux_qubit = 1 
     args.node_qubit = args.graphlet_size
     edge_qubit = args.node_qubit - 1
     n_qubits = args.node_qubit + edge_qubit
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    q_dev = qml.device("default.qubit", wires=n_qubits + 2) # number of ancilla qubits
+    q_dev = qml.device("default.qubit", wires=n_qubits + aux_qubit) # number of ancilla qubits
+    print(f'Quantum device: {n_qubits} qubit - {q_dev}')
 
     # PQC weight shape settings
     w_shapes_dict = {
-        'spreadlayer': (0, n_qubits, 1),
+        # 'spreadlayer': (0, n_qubits, 1),
         # Old
         # 'strong': (2, args.num_ent_layers, 3, 3), # 3
         # # 'strong': (3, args.num_ent_layers, 2, 3), # 2
@@ -91,8 +95,9 @@ def main(args):
         # 'strong': (1, args.num_ent_layers, 2, 3), # strong ent
         'inits': (args.num_ent_layers, 4), # Custom 14
         'strong': (args.num_ent_layers, 4), # custom 14
-        'update': (args.graphlet_size, args.num_ent_layers-1, 4, 3),
-        'twodesign': (0, args.num_ent_layers, 1, 2)
+        'update': (edge_qubit, args.num_ent_layers, 2 + aux_qubit, 3), 
+        # 'update': (args.graphlet_size, args.num_ent_layers-1, 4, 3),
+        # 'twodesign': (0, args.num_ent_layers, 1, 2)
     }
 
     # Load dataset
@@ -121,18 +126,22 @@ def main(args):
     # Model metadata
     if het_node_type is None:
         node_input_dim = dataset[0].x.shape[1] if dataset[0].x is not None else 0
-        edge_input_dim = dataset[0].edge_attr.shape[1] if dataset[0].edge_attr is not None else 0
+        if args.no_Edge:
+            edge_input_dim = 0
+        else:
+            edge_input_dim = dataset[0].edge_attr.shape[1] if dataset[0].edge_attr is not None else 0
         num_classes = dataset.num_classes
     else:
         node_input_dim = dataset[0][het_node_type].x.shape[1] if dataset[0][het_node_type].x is not None else 0
         edge_input_dim = 0
         for edge_type in dataset[0].edge_types:
             edge_attr = dataset[0][edge_type].get('edge_attr', None)
-            if edge_attr is not None:
+            if not args.no_Edge and edge_attr is not None:
                 edge_input_dim = edge_attr.shape[1]
                 break  # take the first found
         num_classes = int(dataset[0][het_node_type].y.max()) + 1
     # Model init
+    if args.dataset == 'ogbg-molhiv': num_classes = 1
     if task_type == 'graph':
         if args.model == 'qgnn':
             model = QGNNGraphClassifier(
@@ -290,6 +299,23 @@ def main(args):
         raise ValueError("Unsupported task type")
     
     model = model.to(device)
+
+    if args.count_params:
+        quantum_params = 0
+        classical_params = 0
+        for module in model.modules():
+            if isinstance(module, qml.qnn.TorchLayer):
+                quantum_params += sum(p.numel() for p in module.parameters())
+            elif list(module.children()) == []:  # leaf module only
+                classical_params += sum(p.numel() for p in module.parameters())
+        total = quantum_params + classical_params
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Model: {args.model}")
+        print(f"Total parameters:     {total}")
+        print(f"  Quantum parameters: {quantum_params}")
+        print(f"  Classical parameters: {classical_params}")
+        print(f"Trainable parameters: {trainable}")
+        return
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
