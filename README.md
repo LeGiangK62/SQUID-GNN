@@ -23,13 +23,33 @@ Key packages:
 
 Run training with:
 ```bash
-!python main.py --task graph --dataset MUTAG  --epochs 50 --lr 0.005 --step_size 10 --gamma 0.9\
---train_size 100 --test_size 50 --eval_size 100 --seed 1309\
+!python main.py --task graph --dataset MUTAG  --epochs 50 --lr 0.005 --step_size 10 --gamma 0.9 \
+--train_size 100 --test_size 50 --eval_size 100 --seed 1309 \
 --model qgnn --num_gnn_layers 3 --hidden_channels 128  \
 --results --plot --gradient --save_model 
 
-python main.py --task graph --dataset MUTAG --model qgnn --graphlet_size 4 --hidden_channels 64 --epochs 50 --lr 0.005 --step_size 10 --gamma 0.9 --train_size 100 --num_ent_layers 1 --num_gnn_layers 3 --save_model --plot  --results  
+python main.py --task graph --dataset MUTAG --model qgnn --graphlet_size 5 --hidden_channels 64 --epochs 50 --lr 0.005 --step_size 10 --gamma 0.9 --train_size 100 --num_ent_layers 1 --num_gnn_layers 3 --save_model --plot  --results  
+
+python main.py --task graph --dataset MUTAG --model gin --graphlet_size 5 --hidden_channels 64 --epochs 50 --lr 0.005 --step_size 10 --gamma 0.9 --train_size 100 --num_ent_layers 1 --num_gnn_layers 3 --save_model --plot  --results  
 ```
+
+
+Edge Impact:
+```bash
+python main_ogb.py  --dataset ogbg-molbace --model qgnn --graphlet_size 5 --hidden_channels 128 --epochs 500 --lr 0.001 --step_size 10 --gamma 0.8 --train_size 100 --num_ent_layers 1 --num_gnn_layers 3 --save_model --plot --no_Edge
+
+python main_ogb.py  --dataset ogbg-molhiv --model qgnn --graphlet_size 5 --hidden_channels 64 --epochs 500 --lr 0.001 --step_size 10 --gamma 0.8 --train_size 100 --num_ent_layers 1 --num_gnn_layers 3 --save_model --plot  --no_Edge
+
+python main_ogb.py  --dataset ogbg-molbbbp --model qgnn --graphlet_size 5 --hidden_channels 64 --epochs 500 --lr 0.001 --step_size 10 --gamma 0.8 --train_size 100 --num_ent_layers 1 --num_gnn_layers 3 --save_model --plot  --no_Edge
+```
+
+No edge:        ogbg-molbbbp_model_20260414-151131_qgnn_5_500_0.001.pt
+                ogbg-molbace_model_20260414-102738_qgnn_5_500_0.001.pt
+                ogbg-molhiv_model_20260414-174518_qgnn_5_500_0.001
+
+Edge included:  ogbg-molbbbp_model_20260414-151204_qgnn_5_500_0.001.pt
+                ogbg-molbace_model_20260413-234155_qgnn_5_1000_0.001.pt
+                ogbg-molhiv_model_20260414-174507_qgnn_5_500_0.001.pt
 
 ### Parameters
 

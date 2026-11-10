@@ -80,14 +80,22 @@ def test_graph(model, loader, criterion, device, num_classes=0):
     all_labels = []
     f1 = 0
     
+    is_bce = isinstance(criterion, torch.nn.BCEWithLogitsLoss)
     
     for data in loader:
         data = data.to(device)
         out = model(data.x, data.edge_attr, data.edge_index, data.batch)
-        loss = criterion(out, data.y)
+        if is_bce:                                                                
+            loss = criterion(out.squeeze(), data.y.float().squeeze())             
+            pred = (torch.sigmoid(out.squeeze()) > 0.5).long()                    
+        else:                                                                     
+            loss = criterion(out, data.y)                                         
+            pred = out.argmax(dim=1)   
+        # loss = criterion(out, data.y)
         total_loss += float(loss) * data.num_graphs
-        pred = out.argmax(dim=1)
-        correct += (pred == data.y).sum().item()
+        # pred = out.argmax(dim=1)
+        # correct += (pred == data.y).sum().item()
+        correct += (pred == data.y.squeeze()).sum().item() 
         
         all_preds.append(pred)
         all_labels.append(data.y)

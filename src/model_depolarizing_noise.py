@@ -4,6 +4,9 @@ import pennylane as qml
 import numpy as np
 from torch_geometric.nn import global_add_pool
 
+# Shared feature -> encoding-angle map (same function as every other SQUID-GNN path)
+from model import input_process
+
 # --- 1. CÁC HÀM MẠCH QUANTUM (PQC) ---
 
 def apply_noise(noise_prob, wires):
@@ -128,19 +131,23 @@ class QGNNGraphClassifier(nn.Module):
             edge_attr = edge_attr.float()
             if edge_attr.ndim == 1: edge_attr = edge_attr.unsqueeze(1)
 
-        node_features = torch.tanh(self.input_node(node_feat)) * np.pi
-        edge_features = torch.tanh(self.input_edge(edge_attr)) * np.pi
-        
+        # node_features is the classical feature h and is never squashed; its encoding
+        # angles are recomputed from h at every hop (node_angles). Edges are not updated,
+        # so edge_features holds the edge encoding angles, computed once.
+        node_features = self.input_node(node_feat)
+        edge_features = input_process(self.input_edge(edge_attr))
+
         for i in range(self.hop_neighbor):
             q_layer, upd_layer, norm_layer = self.qconvs[f"lay{i+1}"], self.upds[f"lay{i+1}"], self.norms[f"lay{i+1}"]
+            node_angles = input_process(node_features)  # encoding angles of h for this hop
             updates_node = torch.zeros_like(node_features)
-            
+
             for center in torch.unique(edge_index[:, 1]):
                 mask = (edge_index[:, 1] == center)
                 neighbor_ids = edge_index[:, 0][mask][:self.graphlet_size-1]
                 edge_ids = torch.nonzero(mask).view(-1)[:self.graphlet_size-1]
-                
-                q_input = torch.cat([edge_features[edge_ids], node_features[center].unsqueeze(0), node_features[neighbor_ids]], dim=0).flatten()
+
+                q_input = torch.cat([edge_features[edge_ids], node_angles[center].unsqueeze(0), node_angles[neighbor_ids]], dim=0).flatten()
                 all_msg = q_layer(q_input)
                 updates_node[center] = upd_layer(torch.cat([node_features[center], all_msg], dim=0))
             

@@ -54,7 +54,7 @@ def qgcn_enhance_layer(inputs, spreadlayer, strong, inits, update):
     
     center_wire = num_edges_qbit
     
-    
+    # Encoding
     for i in range(num_edges):
         qml.RY(adjacency_matrix[i][0], wires=i)
         qml.RZ(adjacency_matrix[i][1], wires=i)
@@ -65,7 +65,7 @@ def qgcn_enhance_layer(inputs, spreadlayer, strong, inits, update):
         qml.RZ(vertex_features[i][1], wires=center_wire+i)
         # qml.RX(vertex_features[i][2], wires=center_wire+i)
     
-    
+    # MSG - input center but do not use 
     for i in range(num_edges):
 
         # message_passing_pqc(strong=strong, twodesign=twodesign, inits=inits, 
@@ -73,6 +73,7 @@ def qgcn_enhance_layer(inputs, spreadlayer, strong, inits, update):
         entangle_circuit(strong=strong, inits=inits, 
                             wires=[i, center_wire, center_wire+i+1])
 
+    # AGG - need update
     # for i in range(num_edges):
     #     # qml.StronglyEntanglingLayers(weights=update[0], wires=[center_wire, center_wire+i+1])
     for i in range(num_edges):
@@ -80,6 +81,8 @@ def qgcn_enhance_layer(inputs, spreadlayer, strong, inits, update):
         # qml.StronglyEntanglingLayers(weights=update[i],wires=[center_wire, center_wire+i+1])
         # 2 qubit auxiliary
         qml.StronglyEntanglingLayers(weights=update[i],wires=[center_wire, center_wire+i+1, num_qbit, num_qbit+1])
+
+    # Measurement - do not touch    
     expval = [
         qml.expval(qml.PauliZ(center_wire)),
         qml.expval(qml.PauliZ(num_qbit)),
@@ -154,6 +157,125 @@ def qgcn_enhance_layer_batched(inputs, strong, inits, update):
     ]
 
 
+def aggregate_circuit(w_pre, agg, w_post, center_wire, neighbor_wires):
+    """
+    AGG block (new): W_pre(center) -> [Rot(neighbor) -> CNOT(center -> neighbor)] * K -> W_post(center)
+
+    `agg` is shared by every neighbor. All CNOTs share the same control, so they
+    commute and the block is invariant to the neighbor order.
+    """
+    qml.Rot(w_pre[0], w_pre[1], w_pre[2], wires=center_wire)
+
+    for neighbor_w in neighbor_wires:
+        qml.Rot(agg[0], agg[1], agg[2], wires=neighbor_w)
+        qml.CNOT(wires=[center_wire, neighbor_w])
+
+    qml.Rot(w_post[0], w_post[1], w_post[2], wires=center_wire)
+
+
+def qgcn_enhance_layer_new(inputs, strong, inits, w_pre, agg, w_post):
+    """
+    inputs: flat [edge_0 ... edge_{E-1}, center, neigh_0 ... neigh_{E-1}], feat_dim = 2.
+    E (number of sampled neighbors) is read from the input size, so it may vary per call.
+
+    Wires: edges 0..E-1 | center E | neighbors E+1..2E   (no auxiliary qubit)
+
+    Weight shapes: strong (L, 4), inits (L, 4), w_pre (3,), agg (3,), w_post (3,)
+    """
+    feat_dim = 2
+    inputs = inputs.reshape(-1, feat_dim)
+
+    num_edges = (inputs.shape[0] - 1) // 2
+    num_nodes = num_edges + 1
+
+    adjacency_matrix, vertex_features = inputs[:num_edges, :], inputs[num_edges:, :]
+
+    center_wire = num_edges
+    neighbor_wires = [center_wire + i + 1 for i in range(num_edges)]
+
+    # Encoding
+    for i in range(num_edges):
+        qml.RY(adjacency_matrix[i][0], wires=i)
+        qml.RZ(adjacency_matrix[i][1], wires=i)
+
+    for i in range(num_nodes):
+        qml.RY(vertex_features[i][0], wires=center_wire + i)
+        qml.RZ(vertex_features[i][1], wires=center_wire + i)
+
+    # MSG (edge <-> neighbor, center is not used)
+    for i in range(num_edges):
+        entangle_circuit(strong=strong, inits=inits,
+                         wires=[i, center_wire, neighbor_wires[i]])
+
+    # AGG
+    aggregate_circuit(w_pre, agg, w_post, center_wire, neighbor_wires)
+
+    # Measurement: Bloch vector of the center qubit
+    return [
+        qml.expval(qml.PauliX(center_wire)),
+        qml.expval(qml.PauliY(center_wire)),
+        qml.expval(qml.PauliZ(center_wire)),
+    ]
+
+
+def qgcn_enhance_layer_new_batched(inputs, strong, inits, w_pre, agg, w_post):
+    """
+    inputs:
+      - shape [flat_dim] cho 1 sample
+      - hoặc [B, flat_dim] cho batch
+
+    Mỗi sample: [edge_0 ... edge_{K-1}, center, neigh_0 ... neigh_{K-1}], feat_dim = 2
+    K cố định trong 1 batch và được suy ra từ flat_dim = (2K + 1) * feat_dim.
+
+    Wires: edges 0..K-1 | center K | neighbors K+1..2K   (no auxiliary qubit)
+
+    Weight shapes: strong (L, 4), inits (L, 4), w_pre (3,), agg (3,), w_post (3,)
+    """
+    feat_dim = 2
+
+    if inputs.ndim == 1:
+        inputs = inputs.unsqueeze(0)   # [1, flat_dim]
+
+    batch_size = inputs.shape[0]
+    rows_per_sample = inputs.shape[1] // feat_dim  # edges + center + neighbors
+    num_edges = (rows_per_sample - 1) // 2
+    num_nodes = num_edges + 1
+    inputs = inputs.reshape(batch_size, rows_per_sample, feat_dim)
+
+    edge_start = 0
+    node_start = num_edges
+    center_wire = node_start
+    neighbor_wires = [node_start + i + 1 for i in range(num_edges)]
+
+    # 1) Encode edge features
+    for i in range(num_edges):
+        qml.RY(inputs[:, i, 0], wires=edge_start + i)
+        qml.RZ(inputs[:, i, 1], wires=edge_start + i)
+
+    # 2) Encode node features
+    for i in range(num_nodes):
+        qml.RY(inputs[:, num_edges + i, 0], wires=node_start + i)
+        qml.RZ(inputs[:, num_edges + i, 1], wires=node_start + i)
+
+    # 3) MSG (edge <-> neighbor, center is not used)
+    for i in range(num_edges):
+        entangle_circuit(
+            strong=strong,
+            inits=inits,
+            wires=[edge_start + i, center_wire, neighbor_wires[i]]
+        )
+
+    # 4) AGG
+    aggregate_circuit(w_pre, agg, w_post, center_wire, neighbor_wires)
+
+    # 5) Readout: Bloch vector of the center qubit
+    return [
+        qml.expval(qml.PauliX(center_wire)),
+        qml.expval(qml.PauliY(center_wire)),
+        qml.expval(qml.PauliZ(center_wire)),
+    ]
+
+
 def small_normal_init(tensor):
     return torch.nn.init.normal_(tensor, mean=0.0, std=0.1)
 
@@ -178,14 +300,31 @@ def identity_block_init(tensor):
         return tensor
     
 def input_process(tensor):
-    # return torch.clamp(tensor, -1.0, 1.0) * np.pi
-    return torch.tanh(tensor) * np.pi
+    """
+    Classical feature h [..., 2] -> encoding angles [..., 2], used at every hop,
+    for nodes and edges alike, right before the RY/RZ encoding gates:
+
+        theta (RY angle) = (tanh(h[..., 0]) + 1) * pi / 2   -> (0, pi)
+        phi   (RZ angle) =  tanh(h[..., 1]) * pi            -> (-pi, pi)
+
+    h itself is never squashed: only the copy that goes to the circuit is mapped.
+    """
+    if tensor.shape[-1] != 2:
+        raise ValueError(
+            f"input_process expects 2 features per qubit (RY, RZ), got last dim {tensor.shape[-1]}"
+        )
+    t = torch.tanh(tensor)
+    theta = (t[..., 0] + 1.0) * (np.pi / 2)
+    phi = t[..., 1] * np.pi
+    return torch.stack([theta, phi], dim=-1)
 
 
 class QGNNGraphClassifier(nn.Module):
     def __init__(self, q_dev, w_shapes, hidden_dim, node_input_dim=1, edge_input_dim=1,
-                 graphlet_size=4, hop_neighbor=1, num_classes=2, one_hot=0):
+                 graphlet_size=4, hop_neighbor=1, num_classes=2, one_hot=0, new_agg=False):
         super().__init__()
+        # new_agg=True -> qgcn_enhance_layer_new (w_shapes keys: strong, inits, w_pre, agg, w_post)
+        self.new_agg = new_agg
         self.hidden_dim = hidden_dim
         self.graphlet_size = graphlet_size
         self.one_hot = one_hot
@@ -224,28 +363,29 @@ class QGNNGraphClassifier(nn.Module):
                     dropout=0.0
             )
         
+        q_layer_fn = qgcn_enhance_layer_new if self.new_agg else qgcn_enhance_layer
         for i in range(self.hop_neighbor):
-            qnode = qml.QNode(qgcn_enhance_layer, q_dev,  interface="torch")
+            qnode = qml.QNode(q_layer_fn, q_dev,  interface="torch")
             self.qconvs[f"lay{i+1}"] = qml.qnn.TorchLayer(qnode, w_shapes, uniform_pi_init)
-            
+
             self.upds[f"lay{i+1}"] = MLP(
                     [self.pqc_dim + self.pqc_out, self.hidden_dim, self.pqc_dim],
-                    act='leaky_relu', 
+                    act='leaky_relu',
                     norm=None, dropout=0.4
             )
-            
+
             self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
-            
+
         self.graph_head = MLP(
                 [self.final_dim, self.hidden_dim, self.hidden_dim, num_classes],
-                act='leaky_relu', 
-                norm='batch_norm', 
+                act='leaky_relu',
+                norm='batch_norm',
                 dropout=0.1
-        ) 
+        )
         self.lin1 = nn.Linear(self.final_dim, self.hidden_dim)
         self.classifier = nn.Linear(self.hidden_dim, num_classes)
         self.dropout = nn.Dropout(0.4)
-        
+
     def sampling_neighbors(self, neighbor_ids, edge_ids):
         # if neighbor_ids.numel() == 0:
         #     return neighbor_ids, edge_ids
@@ -254,29 +394,31 @@ class QGNNGraphClassifier(nn.Module):
             perm = torch.randperm(neighbor_ids.numel())[:self.graphlet_size - 1]
             neighbor_ids = neighbor_ids[perm]
             edge_ids = edge_ids[perm]
-            
+
         return neighbor_ids, edge_ids
-        
+
     def forward(self, node_feat, edge_attr, edge_index, batch):
         edge_index = edge_index.t()
         num_nodes = node_feat.size(0)
         num_nodes_model = self.graphlet_size
         num_edges_model = self.graphlet_size - 1
-        
+
         if edge_attr is None:
             edge_attr = torch.ones((edge_index.size(0), self.edge_input_dim), device=node_feat.device)
-        
+
         edge_features = edge_attr.float()
         node_features = node_feat.float()
-        
+
         edge_features = self.input_edge(edge_features)
         node_features = self.input_node(node_features)
-        
-        node_features = input_process(node_features)
+
+        # node_features is the classical feature h and is never squashed; its encoding
+        # angles are recomputed from h at every hop (node_angles). Edges are not updated,
+        # so edge_features holds the edge encoding angles, computed once.
         # # node_features = node_features + 0.01 * torch.randn_like(node_features)
         edge_features = input_process(edge_features)
-        
-        
+
+
         idx_dict = {
             (int(u), int(v)): i
             for i, (u, v) in enumerate(edge_index.tolist())
@@ -294,6 +436,7 @@ class QGNNGraphClassifier(nn.Module):
             q_layer = self.qconvs[f"lay{i+1}"]
             upd_layer = self.upds[f"lay{i+1}"]
             norm_layer = self.norms[f"lay{i+1}"]
+            node_angles = input_process(node_features)  # encoding angles of h for this hop
 
             # updates_node = node_features.clone() 
             
@@ -311,8 +454,8 @@ class QGNNGraphClassifier(nn.Module):
                 neighbor_ids, edge_ids  = self.sampling_neighbors(neighbor_ids, edge_ids)
                 
                 
-                center_ft = node_features[center]
-                neighbors = node_features[neighbor_ids]
+                center_ft = node_angles[center]
+                neighbors = node_angles[neighbor_ids]
                 n_feat = torch.cat([center_ft.unsqueeze(0), neighbors], dim=0)
                 e_feat = edge_features[edge_ids.view(-1)]
                 inputs = torch.cat([e_feat, n_feat], dim=0)     
@@ -444,6 +587,12 @@ class QGNN_HetNodeClassifier(nn.Module):
                 edge_attr = edge_attr_dict[edge_type]
                 src_feat = x_dict[src_type]
                 dst_feat = x_dict[dst_type]
+
+                # Encoding angles: recomputed from the classical features (never squashed)
+                # every time they go to the circuit.
+                edge_ang = input_process(edge_attr)
+                src_ang = input_process(src_feat)
+                dst_ang = input_process(dst_feat)
                 
                 centers = []
                 updates = []
@@ -458,9 +607,9 @@ class QGNN_HetNodeClassifier(nn.Module):
                     neighbor_ids, edge_ids  = self.sampling_neighbors(neighbor_ids, edge_ids)
                     
                     center = dst_feat[dst_idx]
-                    neighbors = src_feat[neighbor_ids]
-                    n_feat = torch.cat([center.unsqueeze(0), neighbors], dim=0)
-                    e_feat = edge_attr[edge_ids.view(-1)]
+                    neighbors = src_ang[neighbor_ids]
+                    n_feat = torch.cat([dst_ang[dst_idx].unsqueeze(0), neighbors], dim=0)
+                    e_feat = edge_ang[edge_ids.view(-1)]
                     
                     inputs = torch.cat([e_feat, n_feat], dim=0)
                     all_msg = q_layer(inputs.flatten())
@@ -571,7 +720,9 @@ class QGNNNodeClassifier(nn.Module):
         edge_features = self.input_edge(edge_features)
         node_features = self.input_node(node_features)
         
-        node_features = input_process(node_features)
+        # node_features is the classical feature h and is never squashed; its encoding
+        # angles are recomputed from h at every hop (node_angles). Edges are not updated,
+        # so edge_features holds the edge encoding angles, computed once.
         edge_features = input_process(edge_features)
         
         
@@ -579,6 +730,7 @@ class QGNNNodeClassifier(nn.Module):
             q_layer = self.qconvs[f"lay{i+1}"]
             upd_layer = self.upds[f"lay{i+1}"]
             norm_layer = self.norms[f"lay{i+1}"]
+            node_angles = input_process(node_features)  # encoding angles of h for this hop
             
             centers = []
             updates = []
@@ -593,8 +745,8 @@ class QGNNNodeClassifier(nn.Module):
                 neighbor_ids, edge_ids  = self.sampling_neighbors(neighbor_ids, edge_ids)
                 
                 
-                center_ft = node_features[center]
-                neighbors = node_features[neighbor_ids]
+                center_ft = node_angles[center]
+                neighbors = node_angles[neighbor_ids]
                 n_feat = torch.cat([center_ft.unsqueeze(0), neighbors], dim=0)
                 e_feat = edge_features[edge_ids.view(-1)]
                 # e_feat = torch.ones_like(e_feat)
@@ -699,13 +851,16 @@ class QGNN_MUTAG(nn.Module):
         edge_features = self.input_edge(edge_features)
         node_features = self.input_node(node_features)
         
-        node_features = input_process(node_features)
+        # node_features is the classical feature h and is never squashed; its encoding
+        # angles are recomputed from h at every hop (node_angles). Edges are not updated,
+        # so edge_features holds the edge encoding angles, computed once.
         edge_features = input_process(edge_features)
         
         for i in range(self.hop_neighbor):
             q_layer = self.qconvs[f"lay{i+1}"]
             upd_layer = self.upds[f"lay{i+1}"]
             norm_layer = self.norms[f"lay{i+1}"]
+            node_angles = input_process(node_features)  # encoding angles of h for this hop
 
             centers = []
             updates = []
@@ -720,8 +875,8 @@ class QGNN_MUTAG(nn.Module):
                 neighbor_ids, edge_ids  = self.sampling_neighbors(neighbor_ids, edge_ids)
                 
                 
-                center_ft = node_features[center]
-                neighbors = node_features[neighbor_ids]
+                center_ft = node_angles[center]
+                neighbors = node_angles[neighbor_ids]
                 n_feat = torch.cat([center_ft.unsqueeze(0), neighbors], dim=0)
                 e_feat = edge_features[edge_ids.view(-1)]
                 inputs = torch.cat([e_feat, n_feat], dim=0)     
@@ -915,18 +1070,39 @@ class QGNNGraphClassifier_Batched(nn.Module):
         hop_neighbor=1,
         num_classes=2,
         one_hot=0,
+        new_agg=False,
+        no_pad=False,
+        norm='layer',
     ):
         super().__init__()
+        # norm applied to the update before the residual sum: h = norm(update) + h
+        #   'layer' -> nn.LayerNorm(2)   (default; over 2 features it keeps only the sign of a - b)
+        #   'batch' -> nn.BatchNorm1d(2) (per feature, across the nodes of the batch)
+        #   'none'  -> no normalisation
+        if norm not in ('layer', 'batch', 'none'):
+            raise ValueError(f"norm must be 'layer', 'batch' or 'none', got {norm!r}")
+        self.norm = norm
         self.q_dev = q_dev
         self.hidden_dim = hidden_dim
         self.graphlet_size = graphlet_size
         self.hop_neighbor = hop_neighbor
         self.one_hot = one_hot
+        # new_agg=True -> qgcn_enhance_layer_new_batched (w_shapes keys: strong, inits, w_pre, agg, w_post)
+        self.new_agg = new_agg
+        # no_pad=True -> centers with fewer than K neighbors run a smaller circuit instead of zero-padding
+        self.no_pad = no_pad
+        if self.no_pad and not self.new_agg:
+            raise ValueError(
+                "no_pad=True needs new_agg=True: qgcn_enhance_layer_batched has a fixed "
+                "number of neighbors (update.shape[0]) and cannot run without padding."
+            )
 
         self.pqc_dim = 2
         self.final_dim = 2
-        self.pqc_out = 4
+        self.pqc_out = 3 if self.new_agg else 4
         self.max_neighbors = graphlet_size - 1
+        # edge_input_dim <= 0 (e.g. --no_Edge) -> edge qubits are left in |0>, see forward()
+        self.use_edge_attr = edge_input_dim > 0
 
         if self.one_hot:
             self.node_input_dim = 1
@@ -953,8 +1129,9 @@ class QGNNGraphClassifier_Batched(nn.Module):
         self.upds = nn.ModuleDict()
         self.norms = nn.ModuleDict()
 
+        q_layer_fn = qgcn_enhance_layer_new_batched if self.new_agg else qgcn_enhance_layer_batched
         for i in range(self.hop_neighbor):
-            qnode = qml.QNode(qgcn_enhance_layer_batched, q_dev, interface="torch")
+            qnode = qml.QNode(q_layer_fn, q_dev, interface="torch")
             self.qconvs[f"lay{i+1}"] = qml.qnn.TorchLayer(
                 qnode=qnode,
                 weight_shapes=w_shapes,
@@ -968,7 +1145,12 @@ class QGNNGraphClassifier_Batched(nn.Module):
                 dropout=0.1,
             )
 
-            self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
+            if self.norm == 'layer':
+                self.norms[f"lay{i+1}"] = nn.LayerNorm(self.pqc_dim)
+            elif self.norm == 'batch':
+                self.norms[f"lay{i+1}"] = nn.BatchNorm1d(self.pqc_dim)
+            else:
+                self.norms[f"lay{i+1}"] = nn.Identity()
 
         self.graph_head = MLP(
             [self.final_dim, hidden_dim, hidden_dim, num_classes],
@@ -1042,55 +1224,133 @@ class QGNNGraphClassifier_Batched(nn.Module):
         center_ids = torch.stack(centers, dim=0).long()      # [B]
         return q_inputs_batch, center_ids
 
-    def forward(self, node_feat, edge_attr, edge_index, batch):
+    def _build_q_inputs_grouped(self, node_features, edge_features, edge_index):
+        """
+        Build inputs cho PQC, không padding.
+        Các center được gom theo số neighbor thật k (1 <= k <= max_neighbors);
+        mỗi nhóm là 1 batch [B_k, (2k + 1) * feat_dim] chạy mạch 2k + 1 qubit.
+
+        Returns: list of (q_inputs_batch, center_ids), một phần tử cho mỗi k có mặt.
+        """
+        dst_indices = torch.unique(edge_index[:, 1])
+
+        inputs_by_k = {}
+        centers_by_k = {}
+
+        for center in dst_indices:
+            center = center.long()
+
+            neighbor_mask = (edge_index[:, 1] == center)
+            neighbor_ids = edge_index[:, 0][neighbor_mask].long()
+            edge_ids = torch.nonzero(neighbor_mask, as_tuple=False).view(-1).long()
+
+            if neighbor_ids.numel() == 0:
+                continue
+
+            neighbor_ids, edge_ids = self.sampling_neighbors(neighbor_ids, edge_ids)
+            k = neighbor_ids.numel()
+
+            # [k edge rows ; 1 center row ; k neighbor rows]
+            sample_inputs = torch.cat(
+                [
+                    edge_features[edge_ids],
+                    node_features[center].unsqueeze(0),
+                    node_features[neighbor_ids],
+                ],
+                dim=0,
+            )
+            inputs_by_k.setdefault(k, []).append(sample_inputs.flatten())
+            centers_by_k.setdefault(k, []).append(center)
+
+        return [
+            (
+                torch.stack(inputs_by_k[k], dim=0),          # [B_k, (2k + 1) * 2]
+                torch.stack(centers_by_k[k], dim=0).long(),  # [B_k]
+            )
+            for k in sorted(inputs_by_k)
+        ]
+
+    def encode_nodes(self, node_feat, edge_attr, edge_index):
+        """
+        Input MLPs + `hop_neighbor` quantum message-passing layers.
+        Returns node embeddings [N, final_dim] (before any readout).
+        """
         edge_index = edge_index.t().contiguous()
         device = node_feat.device
 
-        if edge_attr is None:
-            edge_attr = torch.ones(
-                (edge_index.size(0), self.edge_input_dim),
-                device=device,
-                dtype=torch.float32,
-            )
-        elif edge_attr.ndim == 1:
-            edge_attr = edge_attr.unsqueeze(-1)
-
         node_features = self.input_node(node_feat.float())
-        edge_features = self.input_edge(edge_attr.float())
+        # node_features is the classical feature h and is never squashed; its encoding
+        # angles are recomputed from h at every hop (node_angles).
 
-        node_features = input_process(node_features)
-        edge_features = input_process(edge_features)
+        if edge_attr is None or not self.use_edge_attr:
+            # No edge attribute: encoding angles are 0, so RY(0), RZ(0) leave every
+            # edge qubit in |0>. The edge MLP is skipped (MLP(0) would not be 0).
+            edge_features = torch.zeros(
+                (edge_index.size(0), self.pqc_dim),
+                device=device,
+                dtype=node_features.dtype,
+            )
+        else:
+            if edge_attr.ndim == 1:
+                edge_attr = edge_attr.unsqueeze(-1)
+            edge_features = self.input_edge(edge_attr.float())
+            edge_features = input_process(edge_features)
 
         for i in range(self.hop_neighbor):
             q_layer = self.qconvs[f"lay{i+1}"]
             upd_layer = self.upds[f"lay{i+1}"]
             norm_layer = self.norms[f"lay{i+1}"]
+            node_angles = input_process(node_features)  # encoding angles of h for this hop
 
             updates_node = torch.zeros_like(node_features)
 
-            q_inputs_batch, center_ids = self._build_q_inputs_batch(
-                node_features=node_features,
-                edge_features=edge_features,
-                edge_index=edge_index,
-            )
-            # print(q_inputs_batch.shape)
+            if self.no_pad:
+                # one batch per number of real neighbors, no padding
+                groups = self._build_q_inputs_grouped(
+                    node_features=node_angles,
+                    edge_features=edge_features,
+                    edge_index=edge_index,
+                )
+            else:
+                # one zero-padded batch
+                q_inputs_batch, center_ids = self._build_q_inputs_batch(
+                    node_features=node_angles,
+                    edge_features=edge_features,
+                    edge_index=edge_index,
+                )
+                groups = [] if q_inputs_batch is None else [(q_inputs_batch, center_ids)]
 
-            if q_inputs_batch is None:
-                node_features = norm_layer(updates_node) + node_features
-                continue
+            for q_inputs_batch, center_ids in groups:
+                # output: [B, pqc_out]
+                all_msgs = q_layer(q_inputs_batch)
 
-            # output: [B, 3]
-            all_msgs = q_layer(q_inputs_batch)
+                center_feat_batch = node_features[center_ids]            # [B, 2]
+                upd_in = torch.cat([center_feat_batch, all_msgs], dim=1) # [B, 2 + pqc_out]
+                updates = upd_layer(upd_in)                              # [B, 2]
 
-            center_feat_batch = node_features[center_ids]            # [B, 2]
-            upd_in = torch.cat([center_feat_batch, all_msgs], dim=1) # [B, 5]
-            updates = upd_layer(upd_in)                              # [B, 2]
+                updates_node = updates_node.index_add(0, center_ids, updates)
 
-            updates_node = updates_node.index_add(0, center_ids, updates)
             node_features = norm_layer(updates_node) + node_features
+
+        return node_features
+
+    def forward(self, node_feat, edge_attr, edge_index, batch):
+        node_features = self.encode_nodes(node_feat, edge_attr, edge_index)
 
         graph_embedding = global_add_pool(node_features, batch)
         graph_embedding = F.relu(graph_embedding)
 
         logits = self.graph_head(graph_embedding)
-        return F.log_softmax(logits, dim=-1)
+        return logits
+
+
+class QGNNNodeClassifier_Batched(QGNNGraphClassifier_Batched):
+    """
+    Node-level version of QGNNGraphClassifier_Batched: same input MLPs, same quantum
+    message-passing layers (same constructor arguments, incl. new_agg / no_pad), but
+    no graph pooling. The head is applied to every node -> logits [N, num_classes].
+    """
+
+    def forward(self, node_feat, edge_attr, edge_index, batch=None):
+        node_features = self.encode_nodes(node_feat, edge_attr, edge_index)
+        return self.graph_head(node_features)
